@@ -1,0 +1,101 @@
+services:
+  pki-init:
+    image: alpine:3.20
+    entrypoint: ["sh", "/pki-init.sh"]
+    volumes:
+      - pki-server-data:/pki-server
+      - pki-client1-data:/pki-client1
+      - pki-client2-data:/pki-client2
+      - client1-cert-data:/client1-cert
+      - client2-cert-data:/client2-cert
+      - ./pki-init.sh:/pki-init.sh:ro
+
+  openvpn-server:
+    build:
+      context: .
+      dockerfile: openvpn.Dockerfile
+    image: openvpn-exporter-test-openvpn:local
+    depends_on:
+      pki-init:
+        condition: service_completed_successfully
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    environment:
+      OPENVPN_ROLE: server
+    volumes:
+      - pki-server-data:/pki:ro
+
+  openvpn-client1:
+    build:
+      context: .
+      dockerfile: openvpn.Dockerfile
+    image: openvpn-exporter-test-openvpn:local
+    depends_on:
+      - openvpn-server
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    environment:
+      OPENVPN_ROLE: client
+      OPENVPN_REMOTE: openvpn-server
+      OPENVPN_MANAGEMENT_PASSWORD: ${CLIENT1_MGMT_PASSWORD}
+    volumes:
+      - pki-client1-data:/pki:ro
+
+  openvpn-client2:
+    build:
+      context: .
+      dockerfile: openvpn.Dockerfile
+    image: openvpn-exporter-test-openvpn:local
+    depends_on:
+      - openvpn-server
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    environment:
+      OPENVPN_ROLE: client
+      OPENVPN_REMOTE: openvpn-server
+      OPENVPN_MANAGEMENT_PASSWORD: ${CLIENT2_MGMT_PASSWORD}
+    volumes:
+      - pki-client2-data:/pki:ro
+
+  exporter1:
+    build: ../..
+    depends_on:
+      - openvpn-client1
+    environment:
+      OPENVPN_EXPORTER_TUNNEL_NAME: client1
+      OPENVPN_EXPORTER_TUNNEL_MANAGEMENT_ADDRESS: openvpn-client1:7504
+      OPENVPN_EXPORTER_TUNNEL_CERT_PATH: /cert/tls.crt
+      OPENVPN_EXPORTER_PASSWORD: ${CLIENT1_MGMT_PASSWORD}
+      OPENVPN_EXPORTER_SCRAPE_TIMEOUT: 3s
+    volumes:
+      - client1-cert-data:/cert:ro
+    ports:
+      - "127.0.0.1:9176:9176"
+
+  exporter2:
+    build: ../..
+    depends_on:
+      - openvpn-client2
+    environment:
+      OPENVPN_EXPORTER_TUNNEL_NAME: client2
+      OPENVPN_EXPORTER_TUNNEL_MANAGEMENT_ADDRESS: openvpn-client2:7504
+      OPENVPN_EXPORTER_TUNNEL_CERT_PATH: /cert/tls.crt
+      OPENVPN_EXPORTER_PASSWORD: ${CLIENT2_MGMT_PASSWORD}
+      OPENVPN_EXPORTER_SCRAPE_TIMEOUT: 3s
+    volumes:
+      - client2-cert-data:/cert:ro
+    ports:
+      - "127.0.0.1:9177:9176"
+
+volumes:
+  pki-server-data:
+  pki-client1-data:
+  pki-client2-data:
+  client1-cert-data:
+  client2-cert-data:
