@@ -1,0 +1,22 @@
+{{- if eq .Values.controller.kind "DaemonSet" }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "openvpn-exporter.fullname" . }}
+  labels:
+    {{- include "openvpn-exporter.labels" . | nindent 4 }}
+  {{- with .Values.controller.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "openvpn-exporter.selectorLabels" . | nindent 6 }}
+  {{- with .Values.controller.updateStrategy }}
+  updateStrategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  template:
+    {{- include "openvpn-exporter.podTemplate" . | nindent 4 }}
+{{- end }}

@@ -1,0 +1,69 @@
+name: Chart
+
+on:
+  pull_request:
+    paths:
+      - "charts/**"
+      - ".github/workflows/chart.yml"
+      - "ct.yaml"
+  push:
+    branches: [main]
+    paths:
+      - "charts/**"
+      - ".github/workflows/chart.yml"
+      - "ct.yaml"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - uses: helm/chart-testing-action@v2
+      - run: ct lint --config ct.yaml --charts charts/openvpn-exporter
+
+  unit-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      # helm-unittest has no Helm-compatible .prov file, so --verify can
+      # never succeed for it (see README for the full explanation); pinning
+      # an explicit release tag is the mitigation that *is* available, so
+      # CI isn't silently tracking the plugin's main branch.
+      - run: helm plugin install --verify=false https://github.com/helm-unittest/helm-unittest
+      - run: helm unittest charts/openvpn-exporter
+
+  kubeconform:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # The 3 most recent Kubernetes minor releases (the upstream support
+        # window at the time this was last updated). Bump when upstream
+        # ships a new minor.
+        k8s-version: ["1.35.9", "1.36.5", "1.37.1"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go install github.com/yannh/kubeconform/cmd/kubeconform@v0.8.0
+      - name: validate every ci/ scenario against this Kubernetes version
+        run: |
+          set -euo pipefail
+          schema_locations=(
+            -schema-location default
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+          )
+          for values in charts/openvpn-exporter/ci/*-values.yaml; do
+            echo "== ${values} =="
+            helm template charts/openvpn-exporter -f "${values}" \
+              | kubeconform -kubernetes-version "${{ matrix.k8s-version }}" -summary -strict "${schema_locations[@]}"
+          done
