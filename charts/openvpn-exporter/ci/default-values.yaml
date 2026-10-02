@@ -1,0 +1,3 @@
+# Explicit scenario for the chart's plain defaults (Deployment, no
+# ServiceMonitor) — once ci/*-values.yaml files exist, `ct lint` only tests
+# those, it no longer tests bare defaults on its own.

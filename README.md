@@ -137,7 +137,7 @@ make docker-build   # openvpn-exporter:dev
 ```
 
 The image is built `FROM scratch`: a static binary running as a non-root
-numeric user (`65532:65532`), with no shell, no CA certificate bundle, and
+numeric user (`65535:65535`), with no shell, no CA certificate bundle, and
 no `/etc/passwd` — none of which the exporter needs, since it makes no
 outbound TLS calls and never resolves a UID to a username.
 
@@ -182,12 +182,3 @@ push to `main`). `release.yml`, on `v*` tags, builds linux/amd64+arm64
 binaries and a GitHub Release via GoReleaser (`.goreleaser.yaml`), and
 builds/pushes a multi-arch image to `ghcr.io/<repo>`. Dependabot
 (`.github/dependabot.yml`) keeps Go modules and Actions up to date weekly.
-
-## Out of scope for this repository
-
-- Validation against a production OpenVPN 2.5/2.6 client beyond what
-  `test/integration/` covers (it currently runs Alpine's OpenVPN 2.6.x).
-- Ansible deployment role.
-- Alloy scrape config, Prometheus alert rules, and Grafana dashboard.
-- A server-mode collector (per-connected-client metrics) and CRL expiry
-  tracking.

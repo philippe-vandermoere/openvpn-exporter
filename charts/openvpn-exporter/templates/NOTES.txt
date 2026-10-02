@@ -1,0 +1,15 @@
+openvpn-exporter has been deployed as a {{ .Values.controller.kind }}.
+
+Metrics endpoint (from inside the cluster):
+  http://{{ include "openvpn-exporter.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/metrics
+
+Check it locally with:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "openvpn-exporter.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  curl http://localhost:{{ .Values.service.port }}/metrics
+
+{{- if not .Values.serviceMonitor.enabled }}
+
+serviceMonitor.enabled is false: nothing is registered with the Prometheus
+Operator. Set --set serviceMonitor.enabled=true (and ensure the
+monitoring.coreos.com CRDs are installed) to enable it.
+{{- end }}

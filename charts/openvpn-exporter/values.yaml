@@ -1,0 +1,180 @@
+image:
+  # -- Image repository.
+  repository: ghcr.io/philippe-vandermoere/openvpn-exporter
+  # -- Image tag. Defaults to the chart's appVersion if unset.
+  tag: ""
+  # -- Image pull policy.
+  pullPolicy: IfNotPresent
+
+# -- Image pull secrets, for private registries.
+imagePullSecrets: []
+
+# -- Override the chart name used to build object names (see `fullnameOverride`
+# for the common case of controlling the whole name directly).
+nameOverride: ""
+
+# -- Override the fully qualified object name entirely (otherwise built from
+# the release name and chart name).
+fullnameOverride: ""
+
+controller:
+  # -- How the exporter is deployed: `Deployment` (a single exporter
+  # instance talking to one remote management interface) or `DaemonSet`
+  # (one exporter per node, typically paired with `hostNetwork: true` when
+  # the OpenVPN client on that node only binds its management interface to
+  # 127.0.0.1 — see the DaemonSet/k3s example below). This chart only
+  # configures a single tunnel per release; install it multiple times (one
+  # release per tunnel) if you need to monitor several.
+  kind: Deployment
+  # -- Replica count. Ignored when `controller.kind` is `DaemonSet`.
+  replicas: 1
+  # -- Use the host's network namespace. Needed in `DaemonSet` mode to reach
+  # a management interface bound to 127.0.0.1 on the node.
+  hostNetwork: false
+  # -- Pod DNS policy. Set to `ClusterFirstWithHostNet` when `hostNetwork` is
+  # true and the pod still needs to resolve cluster-internal names.
+  dnsPolicy: ""
+  # -- Node selector.
+  nodeSelector: {}
+  # -- Tolerations.
+  tolerations: []
+  # -- Affinity rules.
+  affinity: {}
+  # -- Annotations for the Deployment/DaemonSet object itself.
+  annotations: {}
+  # -- Annotations for the pod template.
+  podAnnotations: {}
+  # -- Labels for the pod template.
+  podLabels: {}
+  # -- Resource requests/limits for the exporter container.
+  resources: {}
+  # -- Pod-level securityContext. Defaults match the image, which already
+  # runs as a fixed non-root UID/GID.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65535
+    runAsGroup: 65535
+    fsGroup: 65535
+  # -- Container-level securityContext.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+  # -- Update strategy (`strategy` for a Deployment, `updateStrategy` for a
+  # DaemonSet).
+  updateStrategy: {}
+
+serviceAccount:
+  # -- Create a ServiceAccount. The exporter never calls the Kubernetes API,
+  # so no RBAC is attached either way.
+  create: true
+  # -- Name of the ServiceAccount to use. Defaults to the chart's fullname
+  # when `create` is true.
+  name: ""
+  # -- Annotations for the ServiceAccount.
+  annotations: {}
+
+service:
+  # -- Service port (and the exporter's listen port, see `config.listenAddress`).
+  port: 9176
+  # -- Annotations for the Service.
+  annotations: {}
+
+serviceMonitor:
+  # -- Create a Prometheus Operator ServiceMonitor. Disabled by default: the
+  # `monitoring.coreos.com` CRDs aren't guaranteed to be installed in every
+  # target cluster.
+  enabled: false
+  # -- Namespace for the ServiceMonitor. Defaults to the release namespace.
+  namespace: ""
+  # -- Scrape interval.
+  interval: 30s
+  # -- Scrape timeout.
+  scrapeTimeout: 10s
+  # -- Extra labels, so the ServiceMonitor matches your Prometheus Operator's
+  # `serviceMonitorSelector`.
+  labels: {}
+  # -- `relabelings` on the scrape endpoint.
+  relabelings: []
+  # -- `metricRelabelings` on the scrape endpoint.
+  metricRelabelings: []
+
+config:
+  # -- Value for `OPENVPN_EXPORTER_LISTEN_ADDRESS`.
+  listenAddress: ":9176"
+  # -- Value for `OPENVPN_EXPORTER_SCRAPE_TIMEOUT`.
+  scrapeTimeout: "5s"
+
+  tunnel:
+    # -- Tunnel name. Must be set together with `managementAddress`.
+    name: ""
+    # -- Management interface address.
+    managementAddress: ""
+    # -- Direct path to the client certificate. See the project README for
+    # the `config_path` vs `cert_path` precedence rule.
+    certPath: ""
+    # -- Path to an OpenVPN client config file to parse for `ca`/`cert`.
+    # Takes precedence over `certPath` when both are set.
+    configPath: ""
+
+  # -- Name of an existing Secret holding the management interface password.
+  # Never store the password directly in values. Left empty for an
+  # unprotected management interface.
+  passwordSecretName: ""
+  # -- Key within `passwordSecretName` holding the password.
+  passwordSecretKey: "password"
+
+# -- Extra command-line args for the exporter binary, e.g. `--config=/etc/openvpn-exporter/config.yaml`
+# to use the multi-tunnel YAML config instead of `config.tunnel.*` above —
+# pair with `extraVolumes`/`extraVolumeMounts` to mount that file yourself
+# (e.g. from a ConfigMap you manage outside this chart). Not modeled by the
+# chart directly, to keep it to a single, simple configuration path.
+extraArgs: []
+
+# -- Extra environment variables, e.g. `OPENVPN_EXPORTER_PASSWORD_FILE`
+# pointing at a path from `extraVolumeMounts` below.
+extraEnv: []
+
+# -- Extra volumes — the escape hatch for mounting certificates (a hostPath
+# volume in `DaemonSet` mode, or a Secret/ConfigMap volume in `Deployment`
+# mode) or a full config file for use with `extraArgs` above. Referenced by
+# `config.tunnel.certPath`/`configPath` or your own `extraArgs`.
+extraVolumes: []
+# -- Extra volume mounts, paired with `extraVolumes`.
+extraVolumeMounts: []
+
+livenessProbe:
+  # -- Enable the liveness probe.
+  enabled: true
+  httpGet:
+    # -- Path the probe checks.
+    path: /
+    # -- Port the probe checks (the container port name).
+    port: http
+  # -- Seconds before the first probe.
+  initialDelaySeconds: 5
+  # -- Seconds between probes.
+  periodSeconds: 30
+  # -- Probe timeout in seconds.
+  timeoutSeconds: 5
+  # -- Consecutive failures before the container is considered unhealthy.
+  failureThreshold: 3
+
+readinessProbe:
+  # -- Enable the readiness probe.
+  enabled: true
+  httpGet:
+    # -- Path the probe checks. See the comment on livenessProbe.httpGet.path
+    # above — kept as `/`, not `/metrics`, for the same reason.
+    path: /
+    # -- Port the probe checks (the container port name).
+    port: http
+  # -- Seconds before the first probe.
+  initialDelaySeconds: 5
+  # -- Seconds between probes.
+  periodSeconds: 10
+  # -- Probe timeout in seconds.
+  timeoutSeconds: 5
+  # -- Consecutive failures before the pod is removed from Service endpoints.
+  failureThreshold: 3
