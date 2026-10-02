@@ -1,0 +1,137 @@
+suite: deployment
+templates:
+  - deployment.yaml
+  - daemonset.yaml
+tests:
+  - it: renders a Deployment by default, no DaemonSet
+    template: deployment.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: spec.replicas
+          value: 1
+  - it: does not render a DaemonSet by default
+    template: daemonset.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders a DaemonSet (not a Deployment) when controller.kind is DaemonSet
+    template: daemonset.yaml
+    set:
+      controller.kind: DaemonSet
+    asserts:
+      - isKind:
+          of: DaemonSet
+  - it: does not render a Deployment when controller.kind is DaemonSet
+    template: deployment.yaml
+    set:
+      controller.kind: DaemonSet
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: propagates hostNetwork to the pod spec
+    template: daemonset.yaml
+    set:
+      controller.kind: DaemonSet
+      controller.hostNetwork: true
+    asserts:
+      - equal:
+          path: spec.template.spec.hostNetwork
+          value: true
+
+  - it: does not set hostNetwork by default
+    template: deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.hostNetwork
+
+  - it: uses the password secret via secretKeyRef, never a literal value
+    template: deployment.yaml
+    set:
+      config.passwordSecretName: openvpn-mgmt
+      config.passwordSecretKey: pass
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENVPN_EXPORTER_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: openvpn-mgmt
+                key: pass
+
+  - it: does not set a password env var when passwordSecretName is unset
+    template: deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENVPN_EXPORTER_PASSWORD
+
+  - it: supports a user-provided --config via extraArgs/extraVolumes
+    template: deployment.yaml
+    set:
+      extraArgs: ["--config=/etc/openvpn-exporter/config.yaml"]
+      extraVolumes:
+        - name: config
+          configMap:
+            name: my-config
+      extraVolumeMounts:
+        - name: config
+          mountPath: /etc/openvpn-exporter
+          readOnly: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --config=/etc/openvpn-exporter/config.yaml
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: config
+            mountPath: /etc/openvpn-exporter
+            readOnly: true
+
+  - it: renders no args by default
+    template: deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].args
+
+  - it: sets single-tunnel env vars
+    template: deployment.yaml
+    set:
+      config.tunnel.name: office
+      config.tunnel.managementAddress: 127.0.0.1:7505
+      config.tunnel.certPath: /certs/client.crt
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENVPN_EXPORTER_TUNNEL_NAME
+            value: office
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENVPN_EXPORTER_TUNNEL_MANAGEMENT_ADDRESS
+            value: 127.0.0.1:7505
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENVPN_EXPORTER_TUNNEL_CERT_PATH
+            value: /certs/client.crt
+
+  - it: runs as non-root by default
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop[0]
+          value: ALL

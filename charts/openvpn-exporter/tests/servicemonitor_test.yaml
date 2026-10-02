@@ -1,0 +1,42 @@
+suite: servicemonitor
+templates:
+  - servicemonitor.yaml
+tests:
+  - it: does not render by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders when serviceMonitor.enabled is true
+    set:
+      serviceMonitor.enabled: true
+    asserts:
+      - isKind:
+          of: ServiceMonitor
+      - equal:
+          path: spec.endpoints[0].port
+          value: http
+      - equal:
+          path: spec.endpoints[0].path
+          value: /metrics
+
+  - it: uses the release namespace by default
+    set:
+      serviceMonitor.enabled: true
+    release:
+      namespace: monitoring
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: monitoring
+
+  - it: honors an explicit namespace override
+    set:
+      serviceMonitor.enabled: true
+      serviceMonitor.namespace: custom-ns
+    release:
+      namespace: monitoring
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: custom-ns

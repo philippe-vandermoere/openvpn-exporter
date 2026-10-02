@@ -1,0 +1,23 @@
+{{- if eq .Values.controller.kind "Deployment" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "openvpn-exporter.fullname" . }}
+  labels:
+    {{- include "openvpn-exporter.labels" . | nindent 4 }}
+  {{- with .Values.controller.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.controller.replicas }}
+  selector:
+    matchLabels:
+      {{- include "openvpn-exporter.selectorLabels" . | nindent 6 }}
+  {{- with .Values.controller.updateStrategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  template:
+    {{- include "openvpn-exporter.podTemplate" . | nindent 4 }}
+{{- end }}
