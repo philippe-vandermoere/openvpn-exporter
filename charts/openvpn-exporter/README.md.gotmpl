@@ -24,6 +24,14 @@ several tunnels, install the chart multiple times (one release per tunnel)
 rather than reaching for the binary's own multi-tunnel YAML config (see
 below if you want that anyway).
 
+Naming fields (`nameOverride`, `fullnameOverride`, `serviceAccount.name`),
+the tunnel fields under `config`, and `extraArgs`/`extraEnv`/`extraVolumes`/
+`extraVolumeMounts` are all passed through Helm's `tpl`, so they may contain
+template expressions evaluated against the release — e.g.
+`config.tunnel.name: "{{"{{"}} .Release.Name {{"}}"}}"` to derive the tunnel name from
+the release name automatically, matching the one-release-per-tunnel
+pattern above.
+
 ## Configuring the tunnel
 
 ```yaml

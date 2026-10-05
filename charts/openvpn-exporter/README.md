@@ -24,6 +24,14 @@ several tunnels, install the chart multiple times (one release per tunnel)
 rather than reaching for the binary's own multi-tunnel YAML config (see
 below if you want that anyway).
 
+Naming fields (`nameOverride`, `fullnameOverride`, `serviceAccount.name`),
+the tunnel fields under `config`, and `extraArgs`/`extraEnv`/`extraVolumes`/
+`extraVolumeMounts` are all passed through Helm's `tpl`, so they may contain
+template expressions evaluated against the release — e.g.
+`config.tunnel.name: "{{ .Release.Name }}"` to derive the tunnel name from
+the release name automatically, matching the one-release-per-tunnel
+pattern above.
+
 ## Configuring the tunnel
 
 ```yaml
@@ -134,13 +142,13 @@ match your Prometheus Operator's `serviceMonitorSelector`) to register a
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | config.listenAddress | string | `":9176"` | Value for `OPENVPN_EXPORTER_LISTEN_ADDRESS`. |
-| config.passwordSecretKey | string | `"password"` | Key within `passwordSecretName` holding the password. |
-| config.passwordSecretName | string | `""` | Name of an existing Secret holding the management interface password. Never store the password directly in values. Left empty for an unprotected management interface. |
+| config.passwordSecretKey | string | `"password"` | Key within `passwordSecretName` holding the password. Supports Helm templating. |
+| config.passwordSecretName | string | `""` | Name of an existing Secret holding the management interface password. Never store the password directly in values. Left empty for an unprotected management interface. Supports Helm templating. |
 | config.scrapeTimeout | string | `"5s"` | Value for `OPENVPN_EXPORTER_SCRAPE_TIMEOUT`. |
-| config.tunnel.certPath | string | `""` | Direct path to the client certificate. See the project README for the `config_path` vs `cert_path` precedence rule. |
-| config.tunnel.configPath | string | `""` | Path to an OpenVPN client config file to parse for `ca`/`cert`. Takes precedence over `certPath` when both are set. |
-| config.tunnel.managementAddress | string | `""` | Management interface address. |
-| config.tunnel.name | string | `""` | Tunnel name. Must be set together with `managementAddress`. |
+| config.tunnel.certPath | string | `""` | Direct path to the client certificate. See the project README for the `config_path` vs `cert_path` precedence rule. Supports Helm templating. |
+| config.tunnel.configPath | string | `""` | Path to an OpenVPN client config file to parse for `ca`/`cert`. Takes precedence over `certPath` when both are set. Supports Helm templating. |
+| config.tunnel.managementAddress | string | `""` | Management interface address. Supports Helm templating. |
+| config.tunnel.name | string | `""` | Tunnel name. Must be set together with `managementAddress`. Supports Helm templating, e.g. `"{{ .Release.Name }}"` — handy since the chart recommends one release per tunnel. |
 | controller.affinity | object | `{}` | Affinity rules. |
 | controller.annotations | object | `{}` | Annotations for the Deployment/DaemonSet object itself. |
 | controller.containerSecurityContext | object | `{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true}` | Container-level securityContext. |
@@ -155,23 +163,23 @@ match your Prometheus Operator's `serviceMonitorSelector`) to register a
 | controller.resources | object | `{}` | Resource requests/limits for the exporter container. |
 | controller.tolerations | list | `[]` | Tolerations. |
 | controller.updateStrategy | object | `{}` | Update strategy (`strategy` for a Deployment, `updateStrategy` for a DaemonSet). |
-| extraArgs | list | `[]` | Extra command-line args for the exporter binary, e.g. `--config=/etc/openvpn-exporter/config.yaml` to use the multi-tunnel YAML config instead of `config.tunnel.*` above — pair with `extraVolumes`/`extraVolumeMounts` to mount that file yourself (e.g. from a ConfigMap you manage outside this chart). Not modeled by the chart directly, to keep it to a single, simple configuration path. |
-| extraEnv | list | `[]` | Extra environment variables, e.g. `OPENVPN_EXPORTER_PASSWORD_FILE` pointing at a path from `extraVolumeMounts` below. |
-| extraVolumeMounts | list | `[]` | Extra volume mounts, paired with `extraVolumes`. |
-| extraVolumes | list | `[]` | Extra volumes — the escape hatch for mounting certificates (a hostPath volume in `DaemonSet` mode, or a Secret/ConfigMap volume in `Deployment` mode) or a full config file for use with `extraArgs` above. Referenced by `config.tunnel.certPath`/`configPath` or your own `extraArgs`. |
-| fullnameOverride | string | `""` | Override the fully qualified object name entirely (otherwise built from the release name and chart name). |
+| extraArgs | list | `[]` | Extra command-line args for the exporter binary, e.g. `--config=/etc/openvpn-exporter/config.yaml` to use the multi-tunnel YAML config instead of `config.tunnel.*` above — pair with `extraVolumes`/`extraVolumeMounts` to mount that file yourself (e.g. from a ConfigMap you manage outside this chart). Not modeled by the chart directly, to keep it to a single, simple configuration path. Rendered through Helm templating as a whole, so any entry may contain expressions like `"{{ .Release.Name }}"`. |
+| extraEnv | list | `[]` | Extra environment variables, e.g. `OPENVPN_EXPORTER_PASSWORD_FILE` pointing at a path from `extraVolumeMounts` below. Supports Helm templating (see `extraArgs` above). |
+| extraVolumeMounts | list | `[]` | Extra volume mounts, paired with `extraVolumes`. Supports Helm templating. |
+| extraVolumes | list | `[]` | Extra volumes — the escape hatch for mounting certificates (a hostPath volume in `DaemonSet` mode, or a Secret/ConfigMap volume in `Deployment` mode) or a full config file for use with `extraArgs` above. Referenced by `config.tunnel.certPath`/`configPath` or your own `extraArgs`. Supports Helm templating (see `extraArgs` above). |
+| fullnameOverride | string | `""` | Override the fully qualified object name entirely (otherwise built from the release name and chart name). Supports Helm templating. |
 | image.pullPolicy | string | `"IfNotPresent"` | Image pull policy. |
 | image.repository | string | `"ghcr.io/philippe-vandermoere/openvpn-exporter"` | Image repository. |
 | image.tag | string | `""` | Image tag. Defaults to the chart's appVersion if unset. |
 | imagePullSecrets | list | `[]` | Image pull secrets, for private registries. |
 | livenessProbe.enabled | bool | `true` | Enable the liveness probe. |
 | livenessProbe.failureThreshold | int | `3` | Consecutive failures before the container is considered unhealthy. |
-| livenessProbe.httpGet.path | string | `"/"` | Path the probe checks. Deliberately `/` rather than `/metrics`: the latter triggers a real scrape of the OpenVPN management interface on every probe, so a slow/down tunnel could fail the probe and remove the pod right when Prometheus most needs to see `openvpn_tunnel_up 0`. `/` is a static page with no dependency on tunnel state. |
+| livenessProbe.httpGet.path | string | `"/"` | Path the probe checks. |
 | livenessProbe.httpGet.port | string | `"http"` | Port the probe checks (the container port name). |
 | livenessProbe.initialDelaySeconds | int | `5` | Seconds before the first probe. |
 | livenessProbe.periodSeconds | int | `30` | Seconds between probes. |
 | livenessProbe.timeoutSeconds | int | `5` | Probe timeout in seconds. |
-| nameOverride | string | `""` | Override the chart name used to build object names (see `fullnameOverride` for the common case of controlling the whole name directly). |
+| nameOverride | string | `""` | Override the chart name used to build object names (see `fullnameOverride` for the common case of controlling the whole name directly). Supports Helm templating, e.g. `"{{ .Release.Namespace }}"`. |
 | readinessProbe.enabled | bool | `true` | Enable the readiness probe. |
 | readinessProbe.failureThreshold | int | `3` | Consecutive failures before the pod is removed from Service endpoints. |
 | readinessProbe.httpGet.path | string | `"/"` | Path the probe checks. See the comment on livenessProbe.httpGet.path above — kept as `/`, not `/metrics`, for the same reason. |
@@ -183,7 +191,7 @@ match your Prometheus Operator's `serviceMonitorSelector`) to register a
 | service.port | int | `9176` | Service port (and the exporter's listen port, see `config.listenAddress`). |
 | serviceAccount.annotations | object | `{}` | Annotations for the ServiceAccount. |
 | serviceAccount.create | bool | `true` | Create a ServiceAccount. The exporter never calls the Kubernetes API, so no RBAC is attached either way. |
-| serviceAccount.name | string | `""` | Name of the ServiceAccount to use. Defaults to the chart's fullname when `create` is true. |
+| serviceAccount.name | string | `""` | Name of the ServiceAccount to use. Defaults to the chart's fullname when `create` is true. Supports Helm templating. |
 | serviceMonitor.enabled | bool | `false` | Create a Prometheus Operator ServiceMonitor. Disabled by default: the `monitoring.coreos.com` CRDs aren't guaranteed to be installed in every target cluster. |
 | serviceMonitor.interval | string | `"30s"` | Scrape interval. |
 | serviceMonitor.labels | object | `{}` | Extra labels, so the ServiceMonitor matches your Prometheus Operator's `serviceMonitorSelector`. |

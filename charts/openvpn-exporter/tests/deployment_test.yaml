@@ -100,6 +100,40 @@ tests:
       - notExists:
           path: spec.template.spec.containers[0].args
 
+  - it: renders Helm template expressions embedded in scalar values
+    template: deployment.yaml
+    release:
+      name: myrelease
+    set:
+      config.tunnel.name: "{{ .Release.Name }}-tunnel"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENVPN_EXPORTER_TUNNEL_NAME
+            value: myrelease-tunnel
+
+  - it: renders Helm template expressions embedded in complex values (extraEnv/extraArgs)
+    template: deployment.yaml
+    release:
+      name: myrelease
+      namespace: mynamespace
+    set:
+      extraArgs:
+        - --foo={{ .Release.Name }}
+      extraEnv:
+        - name: EXTRA_VAR
+          value: "{{ .Release.Namespace }}-value"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --foo=myrelease
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EXTRA_VAR
+            value: mynamespace-value
+
   - it: sets single-tunnel env vars
     template: deployment.yaml
     set:
