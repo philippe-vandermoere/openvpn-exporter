@@ -1,18 +1,36 @@
 {{/*
+Renders a value through tpl, so it may itself contain Helm template
+expressions (e.g. "{{ .Release.Name }}") evaluated against .context. Handles
+both plain strings and complex values (lists/maps), which must go through
+toYaml first since tpl only accepts a string.
+Usage: {{ include "openvpn-exporter.render" (dict "value" .Values.x "context" $) }}
+*/}}
+{{- define "openvpn-exporter.render" -}}
+{{- if typeIs "string" .value }}
+{{- tpl .value .context }}
+{{- else }}
+{{- tpl (.value | toYaml) .context }}
+{{- end }}
+{{- end -}}
+
+{{/*
 Chart name.
 */}}
 {{- define "openvpn-exporter.name" -}}
-{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
+{{- $nameOverride := include "openvpn-exporter.render" (dict "value" .Values.nameOverride "context" .) }}
+{{- default .Chart.Name $nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Fully qualified app name.
 */}}
 {{- define "openvpn-exporter.fullname" -}}
-{{- if .Values.fullnameOverride }}
-{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- $fullnameOverride := include "openvpn-exporter.render" (dict "value" .Values.fullnameOverride "context" .) }}
+{{- if $fullnameOverride }}
+{{- $fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
-{{- $name := default .Chart.Name .Values.nameOverride }}
+{{- $nameOverride := include "openvpn-exporter.render" (dict "value" .Values.nameOverride "context" .) }}
+{{- $name := default .Chart.Name $nameOverride }}
 {{- if contains $name .Release.Name }}
 {{- .Release.Name | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -40,10 +58,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{- define "openvpn-exporter.serviceAccountName" -}}
+{{- $name := include "openvpn-exporter.render" (dict "value" .Values.serviceAccount.name "context" .) }}
 {{- if .Values.serviceAccount.create }}
-{{- default (include "openvpn-exporter.fullname" .) .Values.serviceAccount.name }}
+{{- default (include "openvpn-exporter.fullname" .) $name }}
 {{- else }}
-{{- default "default" .Values.serviceAccount.name }}
+{{- default "default" $name }}
 {{- end }}
 {{- end }}
 
@@ -55,7 +74,7 @@ is left to extraArgs/extraVolumes/extraVolumeMounts.
 */}}
 {{- define "openvpn-exporter.args" -}}
 {{- with .Values.extraArgs }}
-{{ toYaml . }}
+{{ include "openvpn-exporter.render" (dict "value" . "context" $) }}
 {{- end }}
 {{- end }}
 
@@ -73,29 +92,29 @@ Container env vars.
 {{- end }}
 {{- if .Values.config.tunnel.name }}
 - name: OPENVPN_EXPORTER_TUNNEL_NAME
-  value: {{ .Values.config.tunnel.name | quote }}
+  value: {{ include "openvpn-exporter.render" (dict "value" .Values.config.tunnel.name "context" $) | quote }}
 {{- end }}
 {{- if .Values.config.tunnel.managementAddress }}
 - name: OPENVPN_EXPORTER_TUNNEL_MANAGEMENT_ADDRESS
-  value: {{ .Values.config.tunnel.managementAddress | quote }}
+  value: {{ include "openvpn-exporter.render" (dict "value" .Values.config.tunnel.managementAddress "context" $) | quote }}
 {{- end }}
 {{- if .Values.config.tunnel.certPath }}
 - name: OPENVPN_EXPORTER_TUNNEL_CERT_PATH
-  value: {{ .Values.config.tunnel.certPath | quote }}
+  value: {{ include "openvpn-exporter.render" (dict "value" .Values.config.tunnel.certPath "context" $) | quote }}
 {{- end }}
 {{- if .Values.config.tunnel.configPath }}
 - name: OPENVPN_EXPORTER_TUNNEL_CONFIG_PATH
-  value: {{ .Values.config.tunnel.configPath | quote }}
+  value: {{ include "openvpn-exporter.render" (dict "value" .Values.config.tunnel.configPath "context" $) | quote }}
 {{- end }}
 {{- if .Values.config.passwordSecretName }}
 - name: OPENVPN_EXPORTER_PASSWORD
   valueFrom:
     secretKeyRef:
-      name: {{ .Values.config.passwordSecretName }}
-      key: {{ .Values.config.passwordSecretKey }}
+      name: {{ include "openvpn-exporter.render" (dict "value" .Values.config.passwordSecretName "context" $) }}
+      key: {{ include "openvpn-exporter.render" (dict "value" .Values.config.passwordSecretKey "context" $) }}
 {{- end }}
 {{- with .Values.extraEnv }}
-{{ toYaml . }}
+{{ include "openvpn-exporter.render" (dict "value" . "context" $) }}
 {{- end }}
 {{- end }}
 
@@ -106,7 +125,7 @@ openvpn-exporter.args above).
 */}}
 {{- define "openvpn-exporter.volumes" -}}
 {{- with .Values.extraVolumes }}
-{{ toYaml . }}
+{{ include "openvpn-exporter.render" (dict "value" . "context" $) }}
 {{- end }}
 {{- end }}
 
@@ -115,7 +134,7 @@ Volume mounts: extraVolumeMounts only.
 */}}
 {{- define "openvpn-exporter.volumeMounts" -}}
 {{- with .Values.extraVolumeMounts }}
-{{ toYaml . }}
+{{ include "openvpn-exporter.render" (dict "value" . "context" $) }}
 {{- end }}
 {{- end }}
 

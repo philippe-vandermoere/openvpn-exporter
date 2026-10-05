@@ -10,11 +10,12 @@ image:
 imagePullSecrets: []
 
 # -- Override the chart name used to build object names (see `fullnameOverride`
-# for the common case of controlling the whole name directly).
+# for the common case of controlling the whole name directly). Supports Helm
+# templating, e.g. `"{{ .Release.Namespace }}"`.
 nameOverride: ""
 
 # -- Override the fully qualified object name entirely (otherwise built from
-# the release name and chart name).
+# the release name and chart name). Supports Helm templating.
 fullnameOverride: ""
 
 controller:
@@ -70,7 +71,7 @@ serviceAccount:
   # so no RBAC is attached either way.
   create: true
   # -- Name of the ServiceAccount to use. Defaults to the chart's fullname
-  # when `create` is true.
+  # when `create` is true. Supports Helm templating.
   name: ""
   # -- Annotations for the ServiceAccount.
   annotations: {}
@@ -107,41 +108,49 @@ config:
   scrapeTimeout: "5s"
 
   tunnel:
-    # -- Tunnel name. Must be set together with `managementAddress`.
+    # -- Tunnel name. Must be set together with `managementAddress`. Supports
+    # Helm templating, e.g. `"{{ .Release.Name }}"` — handy since the chart
+    # recommends one release per tunnel.
     name: ""
-    # -- Management interface address.
+    # -- Management interface address. Supports Helm templating.
     managementAddress: ""
     # -- Direct path to the client certificate. See the project README for
-    # the `config_path` vs `cert_path` precedence rule.
+    # the `config_path` vs `cert_path` precedence rule. Supports Helm templating.
     certPath: ""
     # -- Path to an OpenVPN client config file to parse for `ca`/`cert`.
-    # Takes precedence over `certPath` when both are set.
+    # Takes precedence over `certPath` when both are set. Supports Helm
+    # templating.
     configPath: ""
 
   # -- Name of an existing Secret holding the management interface password.
   # Never store the password directly in values. Left empty for an
-  # unprotected management interface.
+  # unprotected management interface. Supports Helm templating.
   passwordSecretName: ""
-  # -- Key within `passwordSecretName` holding the password.
+  # -- Key within `passwordSecretName` holding the password. Supports Helm
+  # templating.
   passwordSecretKey: "password"
 
 # -- Extra command-line args for the exporter binary, e.g. `--config=/etc/openvpn-exporter/config.yaml`
 # to use the multi-tunnel YAML config instead of `config.tunnel.*` above —
 # pair with `extraVolumes`/`extraVolumeMounts` to mount that file yourself
 # (e.g. from a ConfigMap you manage outside this chart). Not modeled by the
-# chart directly, to keep it to a single, simple configuration path.
+# chart directly, to keep it to a single, simple configuration path. Rendered
+# through Helm templating as a whole, so any entry may contain expressions
+# like `"{{ .Release.Name }}"`.
 extraArgs: []
 
 # -- Extra environment variables, e.g. `OPENVPN_EXPORTER_PASSWORD_FILE`
-# pointing at a path from `extraVolumeMounts` below.
+# pointing at a path from `extraVolumeMounts` below. Supports Helm templating
+# (see `extraArgs` above).
 extraEnv: []
 
 # -- Extra volumes — the escape hatch for mounting certificates (a hostPath
 # volume in `DaemonSet` mode, or a Secret/ConfigMap volume in `Deployment`
 # mode) or a full config file for use with `extraArgs` above. Referenced by
-# `config.tunnel.certPath`/`configPath` or your own `extraArgs`.
+# `config.tunnel.certPath`/`configPath` or your own `extraArgs`. Supports
+# Helm templating (see `extraArgs` above).
 extraVolumes: []
-# -- Extra volume mounts, paired with `extraVolumes`.
+# -- Extra volume mounts, paired with `extraVolumes`. Supports Helm templating.
 extraVolumeMounts: []
 
 livenessProbe:
