@@ -1,6 +1,7 @@
-// Package certs extracts certificate expiry information from an OpenVPN
-// client configuration file. Private keys are never opened or parsed.
-package certs
+// Package openvpn parses OpenVPN client configuration files: certificate
+// expiry (this file) and the management interface directive (management.go).
+// Private keys are never opened or parsed.
+package openvpn
 
 import (
 	"bufio"

@@ -80,6 +80,20 @@
             "configPath": { "type": "string" }
           }
         },
+        "tunnels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "managementAddress"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "managementAddress": { "type": "string", "minLength": 1 },
+              "certPath": { "type": "string" },
+              "configPath": { "type": "string" }
+            }
+          }
+        },
+        "tunnelsGlob": { "type": "string" },
         "passwordSecretName": { "type": "string" },
         "passwordSecretKey": { "type": "string" }
       }

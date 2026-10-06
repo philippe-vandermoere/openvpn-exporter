@@ -126,6 +126,33 @@ func TestCollector_NoCertSourceConfigured(t *testing.T) {
 	assertNotContains(t, metrics, "openvpn_tunnel_cert_expiry_timestamp_seconds{")
 }
 
+func TestCollector_ConfigPathPSKHasNoCertMetrics(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "client.conf")
+	// A pre-shared-key (static key) tunnel has no ca/cert to find: this must
+	// not be treated as an error, just as "nothing to report".
+	content := "dev tun\nremote vpn.example.com 1194\nsecret static.key\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+	addr := startHealthyManagementServer(t)
+
+	c := New([]Tunnel{{
+		Name:              "office",
+		ManagementAddress: addr,
+		ConfigPath:        configPath,
+		Timeout:           2 * time.Second,
+	}}, nil)
+
+	metrics, err := gather(c)
+	if err != nil {
+		t.Fatalf("gathering metrics: %v", err)
+	}
+
+	assertContains(t, metrics, `openvpn_tunnel_up{tunnel="office"} 1`)
+	assertNotContains(t, metrics, "openvpn_tunnel_cert_expiry_timestamp_seconds{")
+}
+
 // startHealthyManagementServer runs a minimal, unprotected fake OpenVPN
 // management interface that always reports CONNECTED with fixed counters.
 func startHealthyManagementServer(t *testing.T) string {

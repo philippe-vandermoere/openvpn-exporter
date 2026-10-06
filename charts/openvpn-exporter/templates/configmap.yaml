@@ -1,0 +1,21 @@
+{{- if .Values.config.tunnels }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "openvpn-exporter.fullname" . }}
+  labels:
+    {{- include "openvpn-exporter.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    tunnels:
+      {{- range .Values.config.tunnels }}
+      - name: {{ include "openvpn-exporter.render" (dict "value" .name "context" $) | quote }}
+        management_address: {{ include "openvpn-exporter.render" (dict "value" .managementAddress "context" $) | quote }}
+        {{- if .certPath }}
+        cert_path: {{ include "openvpn-exporter.render" (dict "value" .certPath "context" $) | quote }}
+        {{- end }}
+        {{- if .configPath }}
+        config_path: {{ include "openvpn-exporter.render" (dict "value" .configPath "context" $) | quote }}
+        {{- end }}
+      {{- end }}
+{{- end }}

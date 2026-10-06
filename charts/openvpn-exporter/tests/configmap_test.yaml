@@ -1,0 +1,48 @@
+suite: configmap
+templates:
+  - configmap.yaml
+tests:
+  - it: does not render by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders a ConfigMap with the tunnels list when config.tunnels is set
+    set:
+      config.tunnels:
+        - name: tun1
+          managementAddress: 127.0.0.1:17505
+          certPath: /etc/openvpn/client/tun1.crt
+        - name: tun2
+          managementAddress: 127.0.0.1:17506
+          configPath: /etc/openvpn/client/tun2.conf
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'name: "tun1"'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'management_address: "127.0.0.1:17505"'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'cert_path: "/etc/openvpn/client/tun1.crt"'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'name: "tun2"'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'config_path: "/etc/openvpn/client/tun2.conf"'
+
+  - it: renders Helm template expressions embedded in tunnel fields
+    release:
+      name: myrelease
+    set:
+      config.tunnels:
+        - name: "{{ .Release.Name }}-tun1"
+          managementAddress: 127.0.0.1:17505
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'name: "myrelease-tun1"'

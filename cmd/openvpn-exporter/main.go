@@ -5,6 +5,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -34,6 +35,9 @@ func main() {
 		logger.Error("failed to load configuration", "error", err)
 		os.Exit(1)
 	}
+	for _, w := range cfg.Warnings {
+		logger.Warn(w)
+	}
 
 	tunnels := make([]collector.Tunnel, 0, len(cfg.Tunnels))
 	for _, t := range cfg.Tunnels {
@@ -42,7 +46,7 @@ func main() {
 			ManagementAddress: t.ManagementAddress,
 			ConfigPath:        t.ConfigPath,
 			CertPath:          t.CertPath,
-			Password:          cfg.Password,
+			Password:          cmp.Or(t.Password, cfg.Password),
 			Timeout:           cfg.ScrapeTimeoutDuration(),
 		})
 	}

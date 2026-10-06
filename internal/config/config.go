@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/pvandermoere/openvpn-exporter/internal/openvpn"
 )
 
 const (
@@ -25,6 +28,7 @@ const (
 	envTunnelMgmtAddress = "OPENVPN_EXPORTER_TUNNEL_MANAGEMENT_ADDRESS"
 	envTunnelConfigPath  = "OPENVPN_EXPORTER_TUNNEL_CONFIG_PATH"
 	envTunnelCertPath    = "OPENVPN_EXPORTER_TUNNEL_CERT_PATH"
+	envTunnelsGlob       = "OPENVPN_EXPORTER_TUNNELS_GLOB"
 )
 
 // Duration wraps time.Duration to support YAML values like "5s" as well as
@@ -67,6 +71,12 @@ type Tunnel struct {
 	ManagementAddress string `yaml:"management_address"`
 	ConfigPath        string `yaml:"config_path"`
 	CertPath          string `yaml:"cert_path"`
+
+	// Password overrides Config.Password for this tunnel specifically.
+	// Empty means "use the global password" (the common case). Populated
+	// automatically for tunnels discovered via TunnelsGlob when their
+	// "management" directive references a readable password file.
+	Password string `yaml:"password"`
 }
 
 // Config is the fully resolved exporter configuration.
@@ -76,12 +86,28 @@ type Config struct {
 	PasswordFile  string   `yaml:"password_file"`
 	Tunnels       []Tunnel `yaml:"tunnels"`
 
+	// TunnelsGlob, if set, is expanded at load time: every matched file
+	// becomes an additional tunnel (added to Tunnels, not replacing it).
+	// The tunnel name is the filename without its extension, ConfigPath is
+	// the matched file itself (reusing the existing ca/cert parsing), and
+	// ManagementAddress comes from parsing the file's "management"
+	// directive (see internal/openvpn.ParseManagement) — only TCP
+	// directives bound to a reachable address are supported.
+	TunnelsGlob string `yaml:"tunnels_glob"`
+
 	// Password is the management interface password, resolved at startup
 	// from either OPENVPN_EXPORTER_PASSWORD (direct value) or PasswordFile
 	// (OPENVPN_EXPORTER_PASSWORD taking precedence if both are set). Empty
 	// when neither is set (the management interface is then assumed to be
-	// unprotected).
+	// unprotected). Used as the fallback for any tunnel without its own
+	// Password.
 	Password string `yaml:"-"`
+
+	// Warnings collects non-fatal issues found while loading, meant to be
+	// logged by the caller (Load itself never logs). Currently populated
+	// when a TunnelsGlob-discovered tunnel's management password file isn't
+	// readable and falls back to the global Password instead.
+	Warnings []string `yaml:"-"`
 }
 
 // Load builds the configuration from an optional YAML file path and
@@ -116,6 +142,10 @@ func Load(flagConfigPath string) (*Config, error) {
 		return nil, err
 	}
 
+	if err := expandTunnelsGlob(cfg); err != nil {
+		return nil, err
+	}
+
 	if err := validate(cfg); err != nil {
 		return nil, err
 	}
@@ -136,6 +166,9 @@ func applyEnvOverrides(cfg *Config) error {
 	}
 	if v := os.Getenv(envPasswordFile); v != "" {
 		cfg.PasswordFile = v
+	}
+	if v := os.Getenv(envTunnelsGlob); v != "" {
+		cfg.TunnelsGlob = v
 	}
 
 	if len(cfg.Tunnels) == 0 {
@@ -195,6 +228,54 @@ func resolvePassword(cfg *Config) error {
 		return fmt.Errorf("reading password file %s: %w", cfg.PasswordFile, err)
 	}
 	cfg.Password = strings.TrimRight(string(data), "\r\n")
+	return nil
+}
+
+// expandTunnelsGlob expands cfg.TunnelsGlob (if set) and appends one Tunnel
+// per matched file to cfg.Tunnels. A tunnel's management password file not
+// being readable is not immediately fatal: it falls back to cfg.Password
+// (recording a warning) if one is configured, and only errors otherwise.
+func expandTunnelsGlob(cfg *Config) error {
+	if cfg.TunnelsGlob == "" {
+		return nil
+	}
+
+	matches, err := filepath.Glob(cfg.TunnelsGlob)
+	if err != nil {
+		return fmt.Errorf("invalid tunnels_glob %q: %w", cfg.TunnelsGlob, err)
+	}
+
+	for _, match := range matches {
+		name := strings.TrimSuffix(filepath.Base(match), filepath.Ext(match))
+
+		directive, err := openvpn.ParseManagement(match)
+		if err != nil {
+			return fmt.Errorf("discovering tunnel from %s: %w", match, err)
+		}
+
+		tunnel := Tunnel{Name: name, ManagementAddress: directive.Address, ConfigPath: match}
+
+		if directive.PasswordFile != "" {
+			data, readErr := os.ReadFile(directive.PasswordFile)
+			switch {
+			case readErr == nil:
+				tunnel.Password = strings.TrimRight(string(data), "\r\n")
+			case cfg.Password != "":
+				cfg.Warnings = append(cfg.Warnings, fmt.Sprintf(
+					"tunnel %q: management password file %s is not readable (%s), falling back to the global password",
+					name, directive.PasswordFile, readErr,
+				))
+			default:
+				return fmt.Errorf(
+					"tunnel %q: management password file %s is not readable and no global password is configured: %w",
+					name, directive.PasswordFile, readErr,
+				)
+			}
+		}
+
+		cfg.Tunnels = append(cfg.Tunnels, tunnel)
+	}
+
 	return nil
 }
 

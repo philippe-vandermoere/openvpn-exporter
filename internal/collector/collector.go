@@ -11,8 +11,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/pvandermoere/openvpn-exporter/internal/certs"
 	"github.com/pvandermoere/openvpn-exporter/internal/mgmt"
+	"github.com/pvandermoere/openvpn-exporter/internal/openvpn"
 )
 
 // Tunnel is a single tunnel target to scrape.
@@ -127,12 +127,12 @@ func (c *Collector) collectTunnel(ch chan<- prometheus.Metric, t Tunnel) {
 		emitBytes("link", "out", stats.LinkWriteBytes)
 	}
 
-	var certList []certs.Certificate
+	var certList []openvpn.Certificate
 	switch {
 	case t.ConfigPath != "":
-		certList, err = certs.Load(t.ConfigPath)
+		certList, err = openvpn.Load(t.ConfigPath)
 	case t.CertPath != "":
-		certList, err = certs.LoadCertOnly(t.CertPath)
+		certList, err = openvpn.LoadCertOnly(t.CertPath)
 	default:
 		return
 	}
