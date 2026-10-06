@@ -112,6 +112,13 @@ CA's own expiry is arguably a PKI lifecycle concern rather than a
 per-tunnel one — see `test/integration/` for a stack built around this
 minimal-access shape).
 
+A `config_path` pointing at a pre-shared-key (static key, `secret`
+directive) tunnel — which has no TLS handshake and therefore no `ca`/`cert`
+directive at all — is not an error: `openvpn_tunnel_cert_expiry_timestamp_seconds`
+is simply never emitted for that tunnel, exactly as when neither
+`config_path` nor `cert_path` is set. This also applies to tunnels
+discovered via `tunnels_glob` below.
+
 ### Environment variables (container-friendly)
 
 `--config` is optional. These variables apply whether or not a YAML file is

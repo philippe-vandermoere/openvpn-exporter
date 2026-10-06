@@ -165,6 +165,22 @@ func TestLoad_NeverOpensKeyFile(t *testing.T) {
 	}
 }
 
+func TestLoad_PSKConfigHasNoCertificates(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "client.conf")
+	// A pre-shared-key (static key) tunnel has no TLS handshake at all, so
+	// there's no "ca"/"cert" directive to find — this must not be an error.
+	writeFile(t, configPath, "dev tun\nremote vpn.example.com 1194\nsecret static.key\n")
+
+	certs, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load should not fail on a PSK config with no certificates: %v", err)
+	}
+	if len(certs) != 0 {
+		t.Fatalf("expected no certificates, got %v", certs)
+	}
+}
+
 func TestLoadCertOnly_SingleCertificate(t *testing.T) {
 	dir := t.TempDir()
 	certPath := filepath.Join(dir, "tls.crt")
