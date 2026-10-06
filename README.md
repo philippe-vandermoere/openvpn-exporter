@@ -61,6 +61,38 @@ Pass the file with `--config /path/to/config.yaml`. Startup fails fast if a
 tunnel name is duplicated, a `management_address` doesn't parse as
 `host:port`, or a `config_path`/`cert_path` that is set isn't readable.
 
+### Discovering tunnels automatically: `tunnels_glob`
+
+Instead of (or alongside) declaring each tunnel under `tunnels:`, point at a
+glob of OpenVPN client config files and let the exporter derive one tunnel
+per match:
+
+```yaml
+tunnels_glob: /etc/openvpn/client/*.conf
+```
+
+For each matched file: the tunnel's `name` is the filename without its
+extension (`tun1.conf` → `tun1`), `config_path` is the file itself (so `ca`/
+`cert` are tracked exactly as with an explicit `config_path`), and
+`management_address` is parsed straight out of the file's own `management`
+directive — no need to repeat it in values. Only TCP directives bound to a
+genuinely connectable address are supported: `management <path> unix`
+(socket) and `management 0.0.0.0 <port>` (a bind address, not something a
+client can dial) both fail fast with a clear error rather than being
+silently misparsed.
+
+If the directive's optional third argument (a password file) is present,
+its content is used as that tunnel's password — unless the file isn't
+readable, in which case the exporter falls back to the global
+`password`/`password_file`/`OPENVPN_EXPORTER_PASSWORD` (logging a warning)
+rather than failing outright, since that file is often as tightly
+permissioned as the private key sitting next to it. It's only a hard error
+if neither is available.
+
+Matches from `tunnels_glob` are merged with any explicit `tunnels:` entries
+(duplicate names across the two are rejected like any other duplicate); a
+glob matching nothing is not itself an error.
+
 ### Certificate source: `config_path` vs `cert_path`
 
 Both are optional, and a tunnel can set either, both, or neither:
@@ -92,6 +124,7 @@ used, and always take precedence over the corresponding YAML value:
 | `OPENVPN_EXPORTER_SCRAPE_TIMEOUT` | `scrape_timeout` |
 | `OPENVPN_EXPORTER_PASSWORD_FILE` | `password_file` |
 | `OPENVPN_EXPORTER_PASSWORD` | the password value itself, not a path — takes precedence over `OPENVPN_EXPORTER_PASSWORD_FILE`/`password_file` if both are set. Useful when the secret is already injected as an environment variable (Docker/Kubernetes secret) rather than mounted as a file. |
+| `OPENVPN_EXPORTER_TUNNELS_GLOB` | `tunnels_glob` |
 
 If no YAML tunnels are defined, a single tunnel can be declared entirely via
 environment variables — a natural fit for a one-exporter-per-sidecar
@@ -143,7 +176,7 @@ outbound TLS calls and never resolves a UID to a username.
 
 ## Testing
 
-Unit tests (`internal/mgmt`, `internal/certs`, `internal/config`,
+Unit tests (`internal/mgmt`, `internal/openvpn`, `internal/config`,
 `internal/collector`) run against an in-process fake management server and
 don't need Docker:
 
