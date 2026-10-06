@@ -1,4 +1,4 @@
-package certs
+package openvpn
 
 import (
 	"crypto/ecdsa"
