@@ -1,0 +1,19 @@
+config:
+  tunnels:
+    - name: tun1
+      managementAddress: 127.0.0.1:17505
+      certPath: /etc/openvpn/client/tun1.crt
+    - name: tun2
+      managementAddress: 127.0.0.1:17506
+      certPath: /etc/openvpn/client/tun2.crt
+
+extraVolumes:
+  - name: openvpn-certs
+    hostPath:
+      path: /etc/openvpn/client
+      type: Directory
+
+extraVolumeMounts:
+  - name: openvpn-certs
+    mountPath: /etc/openvpn/client
+    readOnly: true

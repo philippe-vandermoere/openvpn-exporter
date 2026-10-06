@@ -67,12 +67,13 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
-Container args: none by default. The chart only supports single-tunnel,
-env-var-driven configuration (see openvpn-exporter.env below) — anything
-beyond that (e.g. a mounted multi-tunnel config.yaml and its --config flag)
-is left to extraArgs/extraVolumes/extraVolumeMounts.
+Container args: --config when config.tunnels is non-empty (the chart's own
+ConfigMap, see openvpn-exporter.volumes below), plus extraArgs.
 */}}
 {{- define "openvpn-exporter.args" -}}
+{{- if .Values.config.tunnels }}
+- --config=/etc/openvpn-exporter/config.yaml
+{{- end }}
 {{- with .Values.extraArgs }}
 {{ include "openvpn-exporter.render" (dict "value" . "context" $) }}
 {{- end }}
@@ -90,6 +91,7 @@ Container env vars.
 - name: OPENVPN_EXPORTER_SCRAPE_TIMEOUT
   value: {{ .Values.config.scrapeTimeout | quote }}
 {{- end }}
+{{- if not .Values.config.tunnels }}
 {{- if .Values.config.tunnel.name }}
 - name: OPENVPN_EXPORTER_TUNNEL_NAME
   value: {{ include "openvpn-exporter.render" (dict "value" .Values.config.tunnel.name "context" $) | quote }}
@@ -106,6 +108,11 @@ Container env vars.
 - name: OPENVPN_EXPORTER_TUNNEL_CONFIG_PATH
   value: {{ include "openvpn-exporter.render" (dict "value" .Values.config.tunnel.configPath "context" $) | quote }}
 {{- end }}
+{{- end }}
+{{- if .Values.config.tunnelsGlob }}
+- name: OPENVPN_EXPORTER_TUNNELS_GLOB
+  value: {{ include "openvpn-exporter.render" (dict "value" .Values.config.tunnelsGlob "context" $) | quote }}
+{{- end }}
 {{- if .Values.config.passwordSecretName }}
 - name: OPENVPN_EXPORTER_PASSWORD
   valueFrom:
@@ -119,20 +126,30 @@ Container env vars.
 {{- end }}
 
 {{/*
-Volumes: extraVolumes only — the chart doesn't generate any volume of its
-own (no multi-tunnel config.yaml/ConfigMap support, see
-openvpn-exporter.args above).
+Volumes: the chart's own ConfigMap (see configmap.yaml) when config.tunnels
+is non-empty, plus extraVolumes.
 */}}
 {{- define "openvpn-exporter.volumes" -}}
+{{- if .Values.config.tunnels }}
+- name: config
+  configMap:
+    name: {{ include "openvpn-exporter.fullname" . }}
+{{- end }}
 {{- with .Values.extraVolumes }}
 {{ include "openvpn-exporter.render" (dict "value" . "context" $) }}
 {{- end }}
 {{- end }}
 
 {{/*
-Volume mounts: extraVolumeMounts only.
+Volume mounts: pairs with openvpn-exporter.volumes above, plus
+extraVolumeMounts.
 */}}
 {{- define "openvpn-exporter.volumeMounts" -}}
+{{- if .Values.config.tunnels }}
+- name: config
+  mountPath: /etc/openvpn-exporter
+  readOnly: true
+{{- end }}
 {{- with .Values.extraVolumeMounts }}
 {{ include "openvpn-exporter.render" (dict "value" . "context" $) }}
 {{- end }}
@@ -150,9 +167,14 @@ metadata:
     {{- with .Values.controller.podLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
-  {{- with .Values.controller.podAnnotations }}
+  {{- if or .Values.config.tunnels .Values.controller.podAnnotations }}
   annotations:
+    {{- if .Values.config.tunnels }}
+    checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    {{- end }}
+    {{- with .Values.controller.podAnnotations }}
     {{- toYaml . | nindent 4 }}
+    {{- end }}
   {{- end }}
 spec:
   serviceAccountName: {{ include "openvpn-exporter.serviceAccountName" . }}

@@ -1,0 +1,17 @@
+controller:
+  kind: DaemonSet
+  hostNetwork: true
+
+config:
+  tunnelsGlob: /etc/openvpn/client/*.conf
+
+extraVolumes:
+  - name: openvpn-client
+    hostPath:
+      path: /etc/openvpn/client
+      type: Directory
+
+extraVolumeMounts:
+  - name: openvpn-client
+    mountPath: /etc/openvpn/client
+    readOnly: true

@@ -23,9 +23,10 @@ controller:
   # instance talking to one remote management interface) or `DaemonSet`
   # (one exporter per node, typically paired with `hostNetwork: true` when
   # the OpenVPN client on that node only binds its management interface to
-  # 127.0.0.1 — see the DaemonSet/k3s example below). This chart only
-  # configures a single tunnel per release; install it multiple times (one
-  # release per tunnel) if you need to monitor several.
+  # 127.0.0.1 — see the DaemonSet/k3s example below). A single release
+  # covers as many tunnels as you like via `config.tunnels`/`config.tunnelsGlob`
+  # (or `config.tunnel` for just one); installing multiple releases is only
+  # needed if you also want separate Deployments/DaemonSets.
   kind: Deployment
   # -- Replica count. Ignored when `controller.kind` is `DaemonSet`.
   replicas: 1
@@ -110,7 +111,8 @@ config:
   tunnel:
     # -- Tunnel name. Must be set together with `managementAddress`. Supports
     # Helm templating, e.g. `"{{ .Release.Name }}"` — handy since the chart
-    # recommends one release per tunnel.
+    # recommends one release per tunnel. Ignored when `config.tunnels` is
+    # non-empty.
     name: ""
     # -- Management interface address. Supports Helm templating.
     managementAddress: ""
@@ -122,6 +124,27 @@ config:
     # templating.
     configPath: ""
 
+  # -- Multiple tunnels, as a list of `{name, managementAddress, certPath,
+  # configPath}` (same fields as `config.tunnel`, plural). When non-empty,
+  # takes over entirely from `config.tunnel`: the chart renders this list
+  # into a ConfigMap, mounts it, and passes `--config` to the binary instead
+  # of emitting the single-tunnel `OPENVPN_EXPORTER_TUNNEL_*` env vars. Use
+  # this for a subchart-of-a-monitoring-stack deployment where a single
+  # release needs to watch several tunnels. Each field supports Helm
+  # templating (see `extraArgs`).
+  tunnels: []
+
+  # -- Value for `OPENVPN_EXPORTER_TUNNELS_GLOB`: a glob of OpenVPN client
+  # config files (e.g. `/etc/openvpn/client/*.conf`) to auto-discover
+  # tunnels from — each match becomes a tunnel named after its filename,
+  # with its certificate and management address parsed straight out of the
+  # file. See the project README for the full behaviour (including the
+  # per-tunnel management password file fallback). Combines with
+  # `config.tunnel`/`config.tunnels` rather than replacing them; mount the
+  # directory yourself via `extraVolumes`/`extraVolumeMounts`. Supports Helm
+  # templating.
+  tunnelsGlob: ""
+
   # -- Name of an existing Secret holding the management interface password.
   # Never store the password directly in values. Left empty for an
   # unprotected management interface. Supports Helm templating.
@@ -130,13 +153,11 @@ config:
   # templating.
   passwordSecretKey: "password"
 
-# -- Extra command-line args for the exporter binary, e.g. `--config=/etc/openvpn-exporter/config.yaml`
-# to use the multi-tunnel YAML config instead of `config.tunnel.*` above —
-# pair with `extraVolumes`/`extraVolumeMounts` to mount that file yourself
-# (e.g. from a ConfigMap you manage outside this chart). Not modeled by the
-# chart directly, to keep it to a single, simple configuration path. Rendered
-# through Helm templating as a whole, so any entry may contain expressions
-# like `"{{ .Release.Name }}"`.
+# -- Extra command-line args for the exporter binary. For a multi-tunnel
+# YAML config beyond what `config.tunnels` models, pair with
+# `extraVolumes`/`extraVolumeMounts` to mount your own file and pass
+# `--config=/path/to/config.yaml` here. Rendered through Helm templating as
+# a whole, so any entry may contain expressions like `"{{ .Release.Name }}"`.
 extraArgs: []
 
 # -- Extra environment variables, e.g. `OPENVPN_EXPORTER_PASSWORD_FILE`

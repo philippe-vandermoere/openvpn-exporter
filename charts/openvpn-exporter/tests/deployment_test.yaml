@@ -2,6 +2,7 @@ suite: deployment
 templates:
   - deployment.yaml
   - daemonset.yaml
+  - configmap.yaml
 tests:
   - it: renders a Deployment by default, no DaemonSet
     template: deployment.yaml
@@ -169,3 +170,75 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].securityContext.capabilities.drop[0]
           value: ALL
+
+  - it: sets OPENVPN_EXPORTER_TUNNELS_GLOB from config.tunnelsGlob
+    template: deployment.yaml
+    set:
+      config.tunnelsGlob: /etc/openvpn/client/*.conf
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENVPN_EXPORTER_TUNNELS_GLOB
+            value: /etc/openvpn/client/*.conf
+
+  - it: wires --config and the config volume/mount when config.tunnels is set
+    template: deployment.yaml
+    set:
+      config.tunnels:
+        - name: tun1
+          managementAddress: 127.0.0.1:17505
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --config=/etc/openvpn-exporter/config.yaml
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: config
+            mountPath: /etc/openvpn-exporter
+            readOnly: true
+      - equal:
+          path: spec.template.spec.volumes[0].name
+          value: config
+      - equal:
+          path: spec.template.spec.volumes[0].configMap.name
+          value: RELEASE-NAME-openvpn-exporter
+
+  - it: sets a checksum/config pod annotation when config.tunnels is set
+    template: deployment.yaml
+    set:
+      config.tunnels:
+        - name: tun1
+          managementAddress: 127.0.0.1:17505
+    asserts:
+      - exists:
+          path: spec.template.metadata.annotations["checksum/config"]
+
+  - it: does not emit single-tunnel env vars when config.tunnels is set
+    template: deployment.yaml
+    set:
+      config.tunnel.name: office
+      config.tunnel.managementAddress: 127.0.0.1:7505
+      config.tunnels:
+        - name: tun1
+          managementAddress: 127.0.0.1:17505
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENVPN_EXPORTER_TUNNEL_NAME
+            value: office
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENVPN_EXPORTER_TUNNEL_MANAGEMENT_ADDRESS
+            value: 127.0.0.1:7505
+
+  - it: does not wire the config volume/mount by default
+    template: deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.volumes
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts
