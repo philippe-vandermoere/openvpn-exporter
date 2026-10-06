@@ -14,7 +14,7 @@ func clearEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{
 		envConfigPath, envListenAddress, envScrapeTimeout, envPassword, envPasswordFile,
-		envTunnelName, envTunnelMgmtAddress, envTunnelConfigPath, envTunnelCertPath,
+		envTunnelName, envTunnelMgmtAddress, envTunnelConfigPath, envTunnelCertPath, envTunnelsGlob,
 	} {
 		t.Setenv(key, "")
 	}
@@ -22,7 +22,14 @@ func clearEnv(t *testing.T) {
 
 func writeTempFile(t *testing.T, name, content string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), name)
+	return writeFileAt(t, filepath.Join(t.TempDir(), name), content)
+}
+
+// writeFileAt writes content to an exact path (unlike writeTempFile, it
+// doesn't allocate its own directory) — used when several files must land
+// in the same caller-provided directory, e.g. for glob tests.
+func writeFileAt(t *testing.T, path, content string) string {
+	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("writing %s: %v", path, err)
 	}
@@ -353,5 +360,177 @@ tunnels:
 	}
 	if len(cfg.Tunnels) != 1 || cfg.Tunnels[0].Name != "office" {
 		t.Fatalf("unexpected tunnels: %+v", cfg.Tunnels)
+	}
+}
+
+func TestLoad_TunnelsGlob(t *testing.T) {
+	clearEnv(t)
+
+	dir := t.TempDir()
+	writeFileAt(t, filepath.Join(dir, "tun1.conf"), "client\nmanagement 127.0.0.1 7505\n")
+	writeFileAt(t, filepath.Join(dir, "tun2.conf"), "client\nmanagement 127.0.0.1 7506\n")
+
+	yamlContent := "tunnels_glob: " + filepath.Join(dir, "*.conf") + "\n"
+	yamlPath := writeTempFile(t, "config.yaml", yamlContent)
+
+	cfg, err := Load(yamlPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Tunnels) != 2 {
+		t.Fatalf("got %d tunnels, want 2: %+v", len(cfg.Tunnels), cfg.Tunnels)
+	}
+
+	byName := map[string]Tunnel{}
+	for _, tun := range cfg.Tunnels {
+		byName[tun.Name] = tun
+	}
+	tun1, ok := byName["tun1"]
+	if !ok || tun1.ManagementAddress != "127.0.0.1:7505" || tun1.ConfigPath != filepath.Join(dir, "tun1.conf") {
+		t.Errorf("tun1: %+v", tun1)
+	}
+	tun2, ok := byName["tun2"]
+	if !ok || tun2.ManagementAddress != "127.0.0.1:7506" {
+		t.Errorf("tun2: %+v", tun2)
+	}
+}
+
+func TestLoad_TunnelsGlobMergesWithExplicitTunnels(t *testing.T) {
+	clearEnv(t)
+
+	dir := t.TempDir()
+	writeFileAt(t, filepath.Join(dir, "tun1.conf"), "management 127.0.0.1 7505\n")
+
+	officeConfig := writeTempFile(t, "office.conf", "client\n")
+	yamlContent := `
+tunnels_glob: ` + filepath.Join(dir, "*.conf") + `
+tunnels:
+  - name: office
+    management_address: 127.0.0.1:9999
+    config_path: ` + officeConfig + `
+`
+	yamlPath := writeTempFile(t, "config.yaml", yamlContent)
+
+	cfg, err := Load(yamlPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Tunnels) != 2 {
+		t.Fatalf("got %d tunnels, want 2 (1 explicit + 1 discovered): %+v", len(cfg.Tunnels), cfg.Tunnels)
+	}
+}
+
+func TestLoad_TunnelsGlobDuplicateNameWithExplicitTunnelIsAnError(t *testing.T) {
+	clearEnv(t)
+
+	dir := t.TempDir()
+	writeFileAt(t, filepath.Join(dir, "office.conf"), "management 127.0.0.1 7505\n")
+
+	otherConfig := writeTempFile(t, "other.conf", "client\n")
+	yamlContent := `
+tunnels_glob: ` + filepath.Join(dir, "*.conf") + `
+tunnels:
+  - name: office
+    management_address: 127.0.0.1:9999
+    config_path: ` + otherConfig + `
+`
+	yamlPath := writeTempFile(t, "config.yaml", yamlContent)
+
+	if _, err := Load(yamlPath); err == nil {
+		t.Fatal("expected a duplicate tunnel name error, got nil")
+	}
+}
+
+func TestLoad_TunnelsGlobNoMatchesIsNotAnErrorByItself(t *testing.T) {
+	clearEnv(t)
+
+	officeConfig := writeTempFile(t, "office.conf", "client\n")
+	yamlContent := `
+tunnels_glob: /does/not/exist/*.conf
+tunnels:
+  - name: office
+    management_address: 127.0.0.1:7505
+    config_path: ` + officeConfig + `
+`
+	yamlPath := writeTempFile(t, "config.yaml", yamlContent)
+
+	cfg, err := Load(yamlPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Tunnels) != 1 {
+		t.Fatalf("got %d tunnels, want 1 (glob matched nothing): %+v", len(cfg.Tunnels), cfg.Tunnels)
+	}
+}
+
+func TestLoad_TunnelsGlobRejectsUnconnectableManagement(t *testing.T) {
+	clearEnv(t)
+
+	dir := t.TempDir()
+	writeFileAt(t, filepath.Join(dir, "tun1.conf"), "management 0.0.0.0 7505\n")
+
+	yamlContent := "tunnels_glob: " + filepath.Join(dir, "*.conf") + "\n"
+	yamlPath := writeTempFile(t, "config.yaml", yamlContent)
+
+	if _, err := Load(yamlPath); err == nil {
+		t.Fatal("expected an error for a 0.0.0.0 management directive, got nil")
+	}
+}
+
+func TestLoad_TunnelsGlobPasswordFile_Readable(t *testing.T) {
+	clearEnv(t)
+
+	dir := t.TempDir()
+	passFile := writeFileAt(t, filepath.Join(dir, "tun1.pass"), "tunnel-password\n")
+	writeFileAt(t, filepath.Join(dir, "tun1.conf"), "management 127.0.0.1 7505 "+passFile+"\n")
+
+	yamlContent := "tunnels_glob: " + filepath.Join(dir, "tun1.conf") + "\n"
+	yamlPath := writeTempFile(t, "config.yaml", yamlContent)
+
+	cfg, err := Load(yamlPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Tunnels) != 1 || cfg.Tunnels[0].Password != "tunnel-password" {
+		t.Fatalf("unexpected tunnels: %+v", cfg.Tunnels)
+	}
+	if len(cfg.Warnings) != 0 {
+		t.Errorf("unexpected warnings: %v", cfg.Warnings)
+	}
+}
+
+func TestLoad_TunnelsGlobPasswordFile_UnreadableFallsBackToGlobalPassword(t *testing.T) {
+	clearEnv(t)
+
+	dir := t.TempDir()
+	writeFileAt(t, filepath.Join(dir, "tun1.conf"), "management 127.0.0.1 7505 /does/not/exist.pass\n")
+
+	yamlContent := "tunnels_glob: " + filepath.Join(dir, "*.conf") + "\n"
+	yamlPath := writeTempFile(t, "config.yaml", yamlContent)
+	t.Setenv(envPassword, "global-password")
+
+	cfg, err := Load(yamlPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Tunnels) != 1 || cfg.Tunnels[0].Password != "" {
+		t.Fatalf("expected the discovered tunnel to have no per-tunnel password (falls back to global at wiring time): %+v", cfg.Tunnels)
+	}
+	if len(cfg.Warnings) != 1 {
+		t.Fatalf("expected 1 warning about the unreadable password file, got %v", cfg.Warnings)
+	}
+}
+
+func TestLoad_TunnelsGlobPasswordFile_UnreadableAndNoGlobalPasswordIsAnError(t *testing.T) {
+	clearEnv(t)
+
+	dir := t.TempDir()
+	writeFileAt(t, filepath.Join(dir, "tun1.conf"), "management 127.0.0.1 7505 /does/not/exist.pass\n")
+
+	yamlContent := "tunnels_glob: " + filepath.Join(dir, "*.conf") + "\n"
+	yamlPath := writeTempFile(t, "config.yaml", yamlContent)
+
+	if _, err := Load(yamlPath); err == nil {
+		t.Fatal("expected an error: password file unreadable and no global password configured")
 	}
 }
