@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Integration test: a real OpenVPN server, two real clients each with their
-# own distinct management password and a strictly isolated PKI volume, and
-# one exporter per client using the minimal cert_path-only interface (a
-# dedicated volume containing just that client's certificate, nothing else
-# — no CA, no key, no config file). Requires Docker with NET_ADMIN/tun
-# support.
+# Integration test: a real OpenVPN server and two real clients running
+# different real OpenVPN releases (openvpn_26 -> 2.6.x, openvpn_25 -> 2.5.x,
+# see openvpn.Dockerfile), each with its own distinct management password
+# and a strictly isolated PKI volume. One exporter per client reads ca+cert
+# via config_path, mounting that client's full PKI directory (its private
+# key is 600/root-owned and genuinely unreadable by the exporter's non-root
+# UID — proving the "key never opened" guarantee against a real file, not
+# just a unit test). Requires Docker with NET_ADMIN/tun support.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -22,11 +24,11 @@ trap cleanup EXIT
 
 fail() {
     echo "FAILED: $1"
-    echo "--- exporter1 logs ---"; $COMPOSE logs exporter1 || true
-    echo "--- exporter2 logs ---"; $COMPOSE logs exporter2 || true
+    echo "--- exporter_26 logs ---"; $COMPOSE logs exporter_26 || true
+    echo "--- exporter_25 logs ---"; $COMPOSE logs exporter_25 || true
     echo "--- openvpn-server logs ---"; $COMPOSE logs openvpn-server || true
-    echo "--- openvpn-client1 logs ---"; $COMPOSE logs openvpn-client1 || true
-    echo "--- openvpn-client2 logs ---"; $COMPOSE logs openvpn-client2 || true
+    echo "--- openvpn_26 logs ---"; $COMPOSE logs openvpn_26 || true
+    echo "--- openvpn_25 logs ---"; $COMPOSE logs openvpn_25 || true
     exit 1
 }
 
@@ -65,69 +67,83 @@ mgmt_check() {
 echo "--- building and starting stack ---"
 $COMPOSE up --build -d
 
-wait_for "client1 connected" '[ "$(completed_count openvpn-client1)" -ge 1 ]' 60
-wait_for "client2 connected" '[ "$(completed_count openvpn-client2)" -ge 1 ]' 60
+wait_for "openvpn_26 connected" '[ "$(completed_count openvpn_26)" -ge 1 ]' 60
+wait_for "openvpn_25 connected" '[ "$(completed_count openvpn_25)" -ge 1 ]' 60
 
 echo "--- checking volume isolation ---"
-client1_files=$($COMPOSE exec -T openvpn-client1 ls /pki | sort | tr '\n' ' ')
-[ "$client1_files" = "ca.crt tls.crt tls.key " ] || fail "openvpn-client1 sees unexpected files in /pki: $client1_files"
-echo "openvpn-client1: $client1_files -- ok"
+client1_files=$($COMPOSE exec -T openvpn_26 ls /pki | sort | tr '\n' ' ')
+[ "$client1_files" = "ca.crt client.conf tls.crt tls.key " ] || fail "openvpn_26 sees unexpected files in /pki: $client1_files"
+echo "openvpn_26: $client1_files -- ok"
 
-client2_files=$($COMPOSE exec -T openvpn-client2 ls /pki | sort | tr '\n' ' ')
-[ "$client2_files" = "ca.crt tls.crt tls.key " ] || fail "openvpn-client2 sees unexpected files in /pki: $client2_files"
-echo "openvpn-client2: $client2_files -- ok"
+client2_files=$($COMPOSE exec -T openvpn_25 ls /pki | sort | tr '\n' ' ')
+[ "$client2_files" = "ca.crt client.conf tls.crt tls.key " ] || fail "openvpn_25 sees unexpected files in /pki: $client2_files"
+echo "openvpn_25: $client2_files -- ok"
+
+echo "--- confirming the private key really is unreadable by a non-root UID (config_path scenario below relies on this) ---"
+client1_key_perms=$($COMPOSE exec -T openvpn_26 stat -c '%a' /pki/tls.key)
+[ "$client1_key_perms" = "600" ] || fail "openvpn_26: tls.key is not 600 ($client1_key_perms)"
+client2_key_perms=$($COMPOSE exec -T openvpn_25 stat -c '%a' /pki/tls.key)
+[ "$client2_key_perms" = "600" ] || fail "openvpn_25: tls.key is not 600 ($client2_key_perms)"
+echo "ok ($client1_key_perms / $client2_key_perms)"
 
 echo "--- checking management passwords are distinct and enforced ---"
 server_password=$($COMPOSE exec -T openvpn-server cat /run/secrets/openvpn-management | tr -d '\r\n')
 
-mgmt_check openvpn-client1 "$CLIENT1_MGMT_PASSWORD" | grep -q "SUCCESS" || fail "client1 rejected its own password"
-echo "client1 accepts its own password -- ok"
-mgmt_check openvpn-client1 "$CLIENT2_MGMT_PASSWORD" | grep -q "SUCCESS" && fail "client1 accepted client2's password"
-echo "client1 rejects client2's password -- ok"
+mgmt_check openvpn_26 "$CLIENT1_MGMT_PASSWORD" | grep -q "SUCCESS" || fail "openvpn_26 rejected its own password"
+echo "openvpn_26 accepts its own password -- ok"
+mgmt_check openvpn_26 "$CLIENT2_MGMT_PASSWORD" | grep -q "SUCCESS" && fail "openvpn_26 accepted openvpn_25's password"
+echo "openvpn_26 rejects openvpn_25's password -- ok"
 
-mgmt_check openvpn-client2 "$CLIENT2_MGMT_PASSWORD" | grep -q "SUCCESS" || fail "client2 rejected its own password"
-echo "client2 accepts its own password -- ok"
-mgmt_check openvpn-client2 "$CLIENT1_MGMT_PASSWORD" | grep -q "SUCCESS" && fail "client2 accepted client1's password"
-echo "client2 rejects client1's password -- ok"
+mgmt_check openvpn_25 "$CLIENT2_MGMT_PASSWORD" | grep -q "SUCCESS" || fail "openvpn_25 rejected its own password"
+echo "openvpn_25 accepts its own password -- ok"
+mgmt_check openvpn_25 "$CLIENT1_MGMT_PASSWORD" | grep -q "SUCCESS" && fail "openvpn_25 accepted openvpn_26's password"
+echo "openvpn_25 rejects openvpn_26's password -- ok"
 
 mgmt_check openvpn-server "$server_password" | grep -q "SUCCESS" || fail "server rejected its own (random) password"
 echo "server accepts its own randomly-generated password -- ok"
-mgmt_check openvpn-server "$CLIENT1_MGMT_PASSWORD" | grep -q "SUCCESS" && fail "server accepted client1's password"
-echo "server rejects client1's password -- ok"
+mgmt_check openvpn-server "$CLIENT1_MGMT_PASSWORD" | grep -q "SUCCESS" && fail "server accepted openvpn_26's password"
+echo "server rejects openvpn_26's password -- ok"
 
-wait_for "exporter1 tunnel up" 'metrics1 | grep -q '\''openvpn_tunnel_up{tunnel="client1"} 1'\''' 60
-wait_for "exporter2 tunnel up" 'metrics2 | grep -q '\''openvpn_tunnel_up{tunnel="client2"} 1'\''' 60
+wait_for "exporter_26 tunnel up" 'metrics1 | grep -q '\''openvpn_tunnel_up{tunnel="openvpn_26"} 1'\''' 60
+wait_for "exporter_25 tunnel up" 'metrics2 | grep -q '\''openvpn_tunnel_up{tunnel="openvpn_25"} 1'\''' 60
 
-echo "--- checking exporters only expose the client cert (no CA, cert_path-only mode) ---"
-metrics1 | grep -q 'openvpn_tunnel_cert_expiry_timestamp_seconds{role="client",subject="client1"' || fail "exporter1: missing client cert expiry metric"
-metrics1 | grep -q 'role="ca"' && fail "exporter1: unexpectedly reports a CA certificate (cert_path mode should never track one)"
-metrics2 | grep -q 'openvpn_tunnel_cert_expiry_timestamp_seconds{role="client",subject="client2"' || fail "exporter2: missing client cert expiry metric"
-metrics2 | grep -q 'role="ca"' && fail "exporter2: unexpectedly reports a CA certificate"
+echo "--- checking exporters read ca+cert via config_path, key never opened ---"
+metrics1 | grep -q 'openvpn_tunnel_cert_expiry_timestamp_seconds{role="ca",subject="openvpn-exporter-test-ca"' || fail "exporter_26: missing CA cert expiry metric"
+metrics1 | grep -q 'openvpn_tunnel_cert_expiry_timestamp_seconds{role="client",subject="client1"' || fail "exporter_26: missing client cert expiry metric"
+metrics2 | grep -q 'openvpn_tunnel_cert_expiry_timestamp_seconds{role="ca",subject="openvpn-exporter-test-ca"' || fail "exporter_25: missing CA cert expiry metric"
+metrics2 | grep -q 'openvpn_tunnel_cert_expiry_timestamp_seconds{role="client",subject="client2"' || fail "exporter_25: missing client cert expiry metric"
+echo "ok"
+
+echo "--- checking tunnel version/state-since metrics against two real OpenVPN releases ---"
+metrics1 | grep -qE 'openvpn_tunnel_info\{tunnel="openvpn_26",version="2\.6\.[0-9]+"\} 1' || fail "exporter_26: missing/wrong version info metric"
+metrics2 | grep -qE 'openvpn_tunnel_info\{tunnel="openvpn_25",version="2\.5\.[0-9]+"\} 1' || fail "exporter_25: missing/wrong version info metric"
+metrics1 | grep -q 'openvpn_tunnel_state_since_timestamp_seconds{tunnel="openvpn_26"}' || fail "exporter_26: missing state-since metric"
+metrics2 | grep -q 'openvpn_tunnel_state_since_timestamp_seconds{tunnel="openvpn_25"}' || fail "exporter_25: missing state-since metric"
 echo "ok"
 
 echo "--- checking traffic counters ---"
-metrics1 | grep -q 'openvpn_tunnel_bytes_total{channel="link",direction="in",tunnel="client1"}' || fail "exporter1: missing traffic counters"
-metrics2 | grep -q 'openvpn_tunnel_bytes_total{channel="link",direction="in",tunnel="client2"}' || fail "exporter2: missing traffic counters"
+metrics1 | grep -q 'openvpn_tunnel_bytes_total{channel="link",direction="in",tunnel="openvpn_26"}' || fail "exporter_26: missing traffic counters"
+metrics2 | grep -q 'openvpn_tunnel_bytes_total{channel="link",direction="in",tunnel="openvpn_25"}' || fail "exporter_25: missing traffic counters"
 echo "ok"
 
 echo "--- stopping openvpn-server to exercise a reconnection ---"
 # The management interfaces stay up throughout (they live in the
 # still-running client processes), so openvpn_tunnel_up stays 1 on both —
 # it's the state label that reflects the reconnection.
-client1_before=$(completed_count openvpn-client1)
-client2_before=$(completed_count openvpn-client2)
+openvpn_26_before=$(completed_count openvpn_26)
+openvpn_25_before=$(completed_count openvpn_25)
 
 $COMPOSE stop openvpn-server
 
-wait_for "client1 state reflects reconnection" 'metrics1 | grep -q '\''openvpn_tunnel_state{state="RECONNECTING",tunnel="client1"} 1'\''' 30
-wait_for "client2 state reflects reconnection" 'metrics2 | grep -q '\''openvpn_tunnel_state{state="RECONNECTING",tunnel="client2"} 1'\''' 30
+wait_for "openvpn_26 state reflects reconnection" 'metrics1 | grep -q '\''openvpn_tunnel_state{state="RECONNECTING",tunnel="openvpn_26"} 1'\''' 30
+wait_for "openvpn_25 state reflects reconnection" 'metrics2 | grep -q '\''openvpn_tunnel_state{state="RECONNECTING",tunnel="openvpn_25"} 1'\''' 30
 
 echo "--- starting openvpn-server back up ---"
 $COMPOSE start openvpn-server
 
-wait_for "client1 reconnected (logs)" '[ "$(completed_count openvpn-client1)" -gt "'"$client1_before"'" ]' 60
-wait_for "client2 reconnected (logs)" '[ "$(completed_count openvpn-client2)" -gt "'"$client2_before"'" ]' 60
-wait_for "exporter1 state back to CONNECTED" 'metrics1 | grep -q '\''openvpn_tunnel_state{state="CONNECTED",tunnel="client1"} 1'\''' 60
-wait_for "exporter2 state back to CONNECTED" 'metrics2 | grep -q '\''openvpn_tunnel_state{state="CONNECTED",tunnel="client2"} 1'\''' 60
+wait_for "openvpn_26 reconnected (logs)" '[ "$(completed_count openvpn_26)" -gt "'"$openvpn_26_before"'" ]' 60
+wait_for "openvpn_25 reconnected (logs)" '[ "$(completed_count openvpn_25)" -gt "'"$openvpn_25_before"'" ]' 60
+wait_for "exporter_26 state back to CONNECTED" 'metrics1 | grep -q '\''openvpn_tunnel_state{state="CONNECTED",tunnel="openvpn_26"} 1'\''' 60
+wait_for "exporter_25 state back to CONNECTED" 'metrics2 | grep -q '\''openvpn_tunnel_state{state="CONNECTED",tunnel="openvpn_25"} 1'\''' 60
 
 echo "--- all checks passed ---"

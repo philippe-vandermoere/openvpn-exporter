@@ -25,8 +25,10 @@ them covers the full need.
 |---|---|---|---|
 | `openvpn_tunnel_up` | gauge | `tunnel` | 1 if the management interface responded, 0 otherwise. |
 | `openvpn_tunnel_state` | gauge | `tunnel`, `state` | Set to 1 for the current OpenVPN state (`CONNECTED`, `RECONNECTING`, ...). Absent when the management interface is unreachable. |
+| `openvpn_tunnel_state_since_timestamp_seconds` | gauge | `tunnel` | Unix timestamp at which the tunnel entered its current state (see `openvpn_tunnel_state`) — join on `tunnel` to know which state it refers to. Read from the management interface's `state` command (the same one used for `openvpn_tunnel_state`), no extra round-trip. Absent when the management interface is unreachable, or if that response's timestamp field couldn't be parsed (the state itself is unaffected either way). |
 | `openvpn_tunnel_bytes_total` | counter | `tunnel`, `channel` (`tunnel`\|`link`), `direction` (`in`\|`out`) | `channel=tunnel` is the plaintext TUN/TAP counters, `channel=link` is the encrypted TCP/UDP counters. Resets whenever OpenVPN restarts — use `rate()`/`increase()`, not the raw value. Absent when the management interface is unreachable (never partially published). |
 | `openvpn_tunnel_cert_expiry_timestamp_seconds` | gauge | `tunnel`, `role` (`ca`\|`client`), `subject` | Certificate expiry as an absolute Unix timestamp (never a day count). Independent of tunnel connectivity. A CA bundle with intermediates yields one series per certificate. Emitted only if `config_path` or `cert_path` is set for the tunnel (see Configuration) — `role="ca"` only ever appears via `config_path`. |
+| `openvpn_tunnel_info` | gauge | `tunnel`, `version` | Always 1; `version` is the OpenVPN release running this tunnel (e.g. `2.6.12`), read from the management interface's `version` command. Absent if that command failed or its response couldn't be parsed (e.g. a very old management API) — this never fails the scrape or affects `openvpn_tunnel_up`, and is logged at most once per tunnel until it next succeeds. |
 | `openvpn_tunnel_scrape_duration_seconds` | gauge | `tunnel` | Duration of the last management interface scrape, including failed/timed-out attempts — useful for spotting a slow management interface. |
 
 Standard `process_*` metrics (CPU, memory, file descriptors) are also
@@ -109,8 +111,7 @@ Both are optional, and a tunnel can set either, both, or neither:
 `cert_path` is the simpler option when you don't want the exporter parsing
 OpenVPN's config syntax, or don't want to track the CA's expiry at all (a
 CA's own expiry is arguably a PKI lifecycle concern rather than a
-per-tunnel one — see `test/integration/` for a stack built around this
-minimal-access shape).
+per-tunnel one).
 
 A `config_path` pointing at a pre-shared-key (static key, `secret`
 directive) tunnel — which has no TLS handshake and therefore no `ca`/`cert`
@@ -192,20 +193,25 @@ go test ./... -race
 ```
 
 `test/integration/run.sh` (`make compose-test`) additionally spins up a real
-OpenVPN server and two real OpenVPN clients (each with its own identity and
-its own management password), plus one exporter per client using the
-minimal `cert_path`-only shape: each exporter mounts a dedicated volume
-containing only that client's certificate — no CA, no private key, no
-config file. `openvpn-server`/`openvpn-client1`/`openvpn-client2` share a
-single minimal image (`test/integration/openvpn.Dockerfile`: the official
-`alpine:3.20` base plus the `openvpn` package, nothing else, built once);
-its entrypoint writes the management password (given or randomly
-generated) and renders the config for its role. Only the exporters are
-built from this repository's root Dockerfile. The test checks PKI volume
-isolation (each client sees only its own cert/key, never another
-consumer's), distinct and enforced management passwords, that both tunnels
-report up with certificate expiry and traffic counters, and that a server
-outage is correctly reflected as
+OpenVPN server and two real OpenVPN clients running different real OpenVPN
+releases — `openvpn_26` (2.6.x) and `openvpn_25` (2.5.x), via
+`test/integration/openvpn.Dockerfile`'s `ALPINE_VERSION` build arg — each
+with its own identity and its own management password. One exporter per
+client reads `ca`/`cert` via `config_path`, mounting that client's full PKI
+directory read-only: `ca.crt`/`tls.crt` are world-readable but `tls.key` is
+`600` and root-owned, while the exporter itself runs as a fixed non-root UID
+(see the root `Dockerfile`) — a real, not simulated, demonstration that the
+private key is never opened. `openvpn-server`/`openvpn_26`/`openvpn_25`
+share that one Dockerfile (official `alpine` base plus the `openvpn`
+package, nothing else); its entrypoint writes the management password
+(given or randomly generated) and renders the config for its role. Only the
+exporters are built from this repository's root Dockerfile. The test checks
+PKI volume isolation (each client sees only its own cert/key, never another
+consumer's), that the private key really is `600` before relying on it,
+distinct and enforced management passwords, that both tunnels report up
+with certificate expiry, the correct real `openvpn_tunnel_info` version and
+`openvpn_tunnel_state_since_timestamp_seconds`, and traffic counters, and
+that a server outage is correctly reflected as
 `openvpn_tunnel_state{state="RECONNECTING"}` on both (note:
 `openvpn_tunnel_up` stays 1 throughout, since the management interface
 itself — which lives in the still-running OpenVPN client process — remains

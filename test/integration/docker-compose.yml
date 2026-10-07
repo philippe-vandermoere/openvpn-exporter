@@ -6,15 +6,13 @@ services:
       - pki-server-data:/pki-server
       - pki-client1-data:/pki-client1
       - pki-client2-data:/pki-client2
-      - client1-cert-data:/client1-cert
-      - client2-cert-data:/client2-cert
       - ./pki-init.sh:/pki-init.sh:ro
 
   openvpn-server:
     build:
       context: .
       dockerfile: openvpn.Dockerfile
-    image: openvpn-exporter-test-openvpn:local
+    image: openvpn-exporter-test-openvpn-26:local
     depends_on:
       pki-init:
         condition: service_completed_successfully
@@ -27,11 +25,15 @@ services:
     volumes:
       - pki-server-data:/pki:ro
 
-  openvpn-client1:
+  # openvpn_26/openvpn_25 run genuinely different, real OpenVPN releases
+  # (2.6.x and 2.5.x respectively, see openvpn.Dockerfile's ALPINE_VERSION
+  # arg) so openvpn_tunnel_info's version parsing is exercised against more
+  # than one real version, not just mocked fixtures.
+  openvpn_26:
     build:
       context: .
       dockerfile: openvpn.Dockerfile
-    image: openvpn-exporter-test-openvpn:local
+    image: openvpn-exporter-test-openvpn-26:local
     depends_on:
       - openvpn-server
     cap_add:
@@ -45,11 +47,13 @@ services:
     volumes:
       - pki-client1-data:/pki:ro
 
-  openvpn-client2:
+  openvpn_25:
     build:
       context: .
       dockerfile: openvpn.Dockerfile
-    image: openvpn-exporter-test-openvpn:local
+      args:
+        ALPINE_VERSION: "3.16"
+    image: openvpn-exporter-test-openvpn-25:local
     depends_on:
       - openvpn-server
     cap_add:
@@ -63,33 +67,38 @@ services:
     volumes:
       - pki-client2-data:/pki:ro
 
-  exporter1:
+  # Both exporters read ca+cert via config_path, mounting their client's
+  # full PKI directory read-only: ca.crt/tls.crt are 644, tls.key is 600 and
+  # root-owned, while the exporter itself runs as non-root (see the root
+  # Dockerfile) -- a real, not simulated, demonstration that the private key
+  # is never opened.
+  exporter_26:
     build: ../..
     depends_on:
-      - openvpn-client1
+      - openvpn_26
     environment:
-      OPENVPN_EXPORTER_TUNNEL_NAME: client1
-      OPENVPN_EXPORTER_TUNNEL_MANAGEMENT_ADDRESS: openvpn-client1:7504
-      OPENVPN_EXPORTER_TUNNEL_CERT_PATH: /cert/tls.crt
+      OPENVPN_EXPORTER_TUNNEL_NAME: openvpn_26
+      OPENVPN_EXPORTER_TUNNEL_MANAGEMENT_ADDRESS: openvpn_26:7504
+      OPENVPN_EXPORTER_TUNNEL_CONFIG_PATH: /pki/client.conf
       OPENVPN_EXPORTER_PASSWORD: ${CLIENT1_MGMT_PASSWORD}
       OPENVPN_EXPORTER_SCRAPE_TIMEOUT: 3s
     volumes:
-      - client1-cert-data:/cert:ro
+      - pki-client1-data:/pki:ro
     ports:
       - "127.0.0.1:9176:9176"
 
-  exporter2:
+  exporter_25:
     build: ../..
     depends_on:
-      - openvpn-client2
+      - openvpn_25
     environment:
-      OPENVPN_EXPORTER_TUNNEL_NAME: client2
-      OPENVPN_EXPORTER_TUNNEL_MANAGEMENT_ADDRESS: openvpn-client2:7504
-      OPENVPN_EXPORTER_TUNNEL_CERT_PATH: /cert/tls.crt
+      OPENVPN_EXPORTER_TUNNEL_NAME: openvpn_25
+      OPENVPN_EXPORTER_TUNNEL_MANAGEMENT_ADDRESS: openvpn_25:7504
+      OPENVPN_EXPORTER_TUNNEL_CONFIG_PATH: /pki/client.conf
       OPENVPN_EXPORTER_PASSWORD: ${CLIENT2_MGMT_PASSWORD}
       OPENVPN_EXPORTER_SCRAPE_TIMEOUT: 3s
     volumes:
-      - client2-cert-data:/cert:ro
+      - pki-client2-data:/pki:ro
     ports:
       - "127.0.0.1:9177:9176"
 
@@ -97,5 +106,3 @@ volumes:
   pki-server-data:
   pki-client1-data:
   pki-client2-data:
-  client1-cert-data:
-  client2-cert-data:
