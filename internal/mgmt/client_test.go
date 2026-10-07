@@ -63,6 +63,16 @@ func serveStateAndStatus(t *testing.T, conn net.Conn, r *bufio.Reader, state str
 			"Auth read bytes,500\r\n" +
 			"END\r\n",
 	))
+
+	if got := serverReadLine(t, r); got != "version\n" {
+		t.Errorf("server: expected %q command, got %q", "version", got)
+	}
+	// Real OpenVPN 2.6.20 response, captured from a live management interface.
+	_, _ = conn.Write([]byte(
+		"OpenVPN Version: OpenVPN 2.6.20 x86_64-alpine-linux-musl [SSL (OpenSSL)] [LZO] [LZ4] [EPOLL] [MH/PKTINFO] [AEAD]\r\n" +
+			"Management Version: 5\r\n" +
+			"END\r\n",
+	))
 }
 
 func TestFetchStats_NoPasswordRequired(t *testing.T) {
@@ -83,8 +93,66 @@ func TestFetchStats_NoPasswordRequired(t *testing.T) {
 	if stats.State != "CONNECTED" {
 		t.Errorf("State = %q, want CONNECTED", stats.State)
 	}
+	if !stats.StateSince.Equal(time.Unix(1700000000, 0)) {
+		t.Errorf("StateSince = %v, want %v", stats.StateSince, time.Unix(1700000000, 0))
+	}
+	if stats.StateSinceErr != nil {
+		t.Errorf("StateSinceErr = %v, want nil", stats.StateSinceErr)
+	}
+	if stats.Version != "2.6.20" {
+		t.Errorf("Version = %q, want 2.6.20", stats.Version)
+	}
+	if stats.VersionErr != nil {
+		t.Errorf("VersionErr = %v, want nil", stats.VersionErr)
+	}
 	if stats.TunReadBytes != 100 || stats.TunWriteBytes != 200 || stats.LinkReadBytes != 300 || stats.LinkWriteBytes != 400 {
 		t.Errorf("unexpected stats: %+v", stats)
+	}
+}
+
+func TestFetchStats_VersionCommandFails(t *testing.T) {
+	addr := startFakeServer(t, func(t *testing.T, conn net.Conn) {
+		_, _ = conn.Write([]byte(">INFO:OpenVPN Management Interface Version 1 -- type 'help' for more info\r\n"))
+		r := bufio.NewReader(conn)
+
+		if got := serverReadLine(t, r); got != "state\n" {
+			t.Errorf("server: expected %q command, got %q", "state", got)
+		}
+		_, _ = conn.Write([]byte("1700000000,CONNECTED,SUCCESS,10.8.0.2,203.0.113.5,1194,,\r\nEND\r\n"))
+
+		if got := serverReadLine(t, r); got != "status\n" {
+			t.Errorf("server: expected %q command, got %q", "status", got)
+		}
+		_, _ = conn.Write([]byte(
+			"TUN/TAP read bytes,100\r\n" +
+				"TUN/TAP write bytes,200\r\n" +
+				"TCP/UDP read bytes,300\r\n" +
+				"TCP/UDP write bytes,400\r\n" +
+				"END\r\n",
+		))
+
+		if got := serverReadLine(t, r); got != "version\n" {
+			t.Errorf("server: expected %q command, got %q", "version", got)
+		}
+		_, _ = conn.Write([]byte("ERROR: unknown command\r\n"))
+	})
+
+	client := &Client{Address: addr}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	stats, err := client.FetchStats(ctx)
+	if err != nil {
+		t.Fatalf("FetchStats should not fail when only the version command fails: %v", err)
+	}
+	if stats.State != "CONNECTED" {
+		t.Errorf("State = %q, want CONNECTED", stats.State)
+	}
+	if stats.Version != "" {
+		t.Errorf("Version = %q, want empty", stats.Version)
+	}
+	if stats.VersionErr == nil {
+		t.Error("expected VersionErr to be set, got nil")
 	}
 }
 

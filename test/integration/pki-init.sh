@@ -40,16 +40,21 @@ cp pki/ca.crt /pki-client2/ca.crt
 cp pki/issued/client2.crt /pki-client2/tls.crt
 cp pki/private/client2.key /pki-client2/tls.key
 
-# Each exporter gets its client's certificate only — no CA, no key.
-cp pki/issued/client1.crt /client1-cert/tls.crt
-cp pki/issued/client2.crt /client2-cert/tls.crt
+# Minimal client config for the EXPORTER's own config_path parsing (not a
+# working OpenVPN config -- the real client config is generated separately
+# by entrypoint.sh inside the openvpn_26/openvpn_25 containers). Relative
+# paths resolve against this file's own directory, so ca.crt/tls.crt/tls.key
+# are found without an absolute path. Proves the exporter reads ca+cert
+# while tls.key (600, root-owned) sits right next to them, unreadable by the
+# exporter's non-root UID.
+printf 'client\nca ca.crt\ncert tls.crt\nkey tls.key\n' >/pki-client1/client.conf
+printf 'client\nca ca.crt\ncert tls.crt\nkey tls.key\n' >/pki-client2/client.conf
 
 chmod 644 /pki-server/ca.crt /pki-server/tls.crt
 chmod 600 /pki-server/tls.key
-chmod 644 /pki-client1/ca.crt /pki-client1/tls.crt
+chmod 644 /pki-client1/ca.crt /pki-client1/tls.crt /pki-client1/client.conf
 chmod 600 /pki-client1/tls.key
-chmod 644 /pki-client2/ca.crt /pki-client2/tls.crt
+chmod 644 /pki-client2/ca.crt /pki-client2/tls.crt /pki-client2/client.conf
 chmod 600 /pki-client2/tls.key
-chmod 644 /client1-cert/tls.crt /client2-cert/tls.crt
 
-echo "PKI generated: server, client1, client2 (+ cert-only copies for exporters)"
+echo "PKI generated: server, client1, client2"

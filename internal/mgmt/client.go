@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 )
 
 // Stats holds the values read from the management interface for a single
@@ -20,6 +21,22 @@ import (
 type Stats struct {
 	// State is the raw OpenVPN state string (e.g. CONNECTED, RECONNECTING).
 	State string
+
+	// StateSince is when the tunnel entered State, zero if the state
+	// response's timestamp field couldn't be parsed. A zero value does not
+	// fail FetchStats on its own.
+	StateSince time.Time
+	// StateSinceErr is non-nil when StateSince couldn't be parsed.
+	StateSinceErr error
+
+	// Version is the OpenVPN version (e.g. "2.6.12"), empty if the
+	// "version" command failed or its response couldn't be parsed. A
+	// missing/old management API not supporting a clean "version" response
+	// is not the same as the tunnel being down, so this does not fail
+	// FetchStats on its own.
+	Version string
+	// VersionErr is non-nil when Version couldn't be obtained.
+	VersionErr error
 
 	// TunReadBytes/TunWriteBytes are the plaintext tunnel-side counters
 	// ("TUN/TAP read/write bytes").
@@ -69,7 +86,7 @@ func (c *Client) FetchStats(ctx context.Context) (*Stats, error) {
 	if err != nil {
 		return nil, fmt.Errorf("state command: %w", err)
 	}
-	state, err := parseStateLines(stateLines)
+	stateRes, err := parseStateLines(stateLines)
 	if err != nil {
 		return nil, fmt.Errorf("state command: %w", err)
 	}
@@ -83,7 +100,22 @@ func (c *Client) FetchStats(ctx context.Context) (*Stats, error) {
 		return nil, fmt.Errorf("status command: %w", err)
 	}
 
-	stats.State = state
+	stats.State = stateRes.State
+	stats.StateSince = stateRes.Since
+	stats.StateSinceErr = stateRes.SinceErr
+
+	// A failed/unparsable "version" command is not fatal: it's stored on
+	// Stats rather than returned, so the caller can decide how to log it
+	// without the tunnel being reported as down.
+	versionLines, err := runCommand(r, conn, "version")
+	if err != nil {
+		stats.VersionErr = fmt.Errorf("version command: %w", err)
+	} else if v, verr := parseVersionLines(versionLines); verr != nil {
+		stats.VersionErr = fmt.Errorf("version command: %w", verr)
+	} else {
+		stats.Version = v
+	}
+
 	return stats, nil
 }
 

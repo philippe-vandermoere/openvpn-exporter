@@ -2,6 +2,7 @@ package collector
 
 import (
 	"bufio"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -9,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"io"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
@@ -16,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -188,6 +191,14 @@ func startHealthyManagementServer(t *testing.T) string {
 						"TCP/UDP write bytes,444\r\n" +
 						"END\r\n",
 				))
+				if _, err := r.ReadString('\n'); err != nil { // "version"
+					return
+				}
+				_, _ = conn.Write([]byte(
+					"OpenVPN Version: OpenVPN 2.6.20 x86_64-alpine-linux-musl [SSL (OpenSSL)] [LZO] [LZ4] [EPOLL] [MH/PKTINFO] [AEAD]\r\n" +
+						"Management Version: 5\r\n" +
+						"END\r\n",
+				))
 			}()
 		}
 	}()
@@ -221,6 +232,8 @@ func TestCollector_HealthyTunnel(t *testing.T) {
 	assertContains(t, metrics, `openvpn_tunnel_cert_expiry_timestamp_seconds{role="ca",subject="Test CA",tunnel="office"}`)
 	assertContains(t, metrics, `openvpn_tunnel_cert_expiry_timestamp_seconds{role="client",subject="Test Client",tunnel="office"}`)
 	assertContains(t, metrics, `openvpn_tunnel_scrape_duration_seconds{tunnel="office"}`)
+	assertContains(t, metrics, `openvpn_tunnel_info{tunnel="office",version="2.6.20"} 1`)
+	assertContains(t, metrics, `openvpn_tunnel_state_since_timestamp_seconds{tunnel="office"} 1.7e+09`)
 }
 
 func TestCollector_DownTunnel(t *testing.T) {
@@ -255,6 +268,10 @@ func TestCollector_DownTunnel(t *testing.T) {
 	// No partial series: state and byte counters must be entirely absent.
 	assertNotContains(t, metrics, "openvpn_tunnel_state{")
 	assertNotContains(t, metrics, "openvpn_tunnel_bytes_total{")
+	// Version/state-since are only meaningful when the management interface
+	// actually responded.
+	assertNotContains(t, metrics, "openvpn_tunnel_info{")
+	assertNotContains(t, metrics, "openvpn_tunnel_state_since_timestamp_seconds{")
 }
 
 func TestCollector_MultipleTunnelsScrapedConcurrently(t *testing.T) {
@@ -275,6 +292,103 @@ func TestCollector_MultipleTunnelsScrapedConcurrently(t *testing.T) {
 
 	assertContains(t, metrics, `openvpn_tunnel_up{tunnel="office"} 1`)
 	assertContains(t, metrics, `openvpn_tunnel_up{tunnel="backup"} 1`)
+}
+
+// startManagementServerWithBadVersion behaves like startHealthyManagementServer
+// except the "version" command always fails, simulating a persistently
+// old/non-conforming management API.
+func startManagementServerWithBadVersion(t *testing.T) string {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = conn.Close() }()
+				_, _ = conn.Write([]byte(">INFO:OpenVPN Management Interface Version 1 -- type 'help' for more info\r\n"))
+				r := bufio.NewReader(conn)
+				if _, err := r.ReadString('\n'); err != nil { // "state"
+					return
+				}
+				_, _ = conn.Write([]byte("1700000000,CONNECTED,SUCCESS,10.8.0.2,203.0.113.5,1194,,\r\nEND\r\n"))
+				if _, err := r.ReadString('\n'); err != nil { // "status"
+					return
+				}
+				_, _ = conn.Write([]byte(
+					"TUN/TAP read bytes,111\r\n" +
+						"TUN/TAP write bytes,222\r\n" +
+						"TCP/UDP read bytes,333\r\n" +
+						"TCP/UDP write bytes,444\r\n" +
+						"END\r\n",
+				))
+				if _, err := r.ReadString('\n'); err != nil { // "version"
+					return
+				}
+				_, _ = conn.Write([]byte("ERROR: unknown command\r\n"))
+			}()
+		}
+	}()
+
+	return ln.Addr().String()
+}
+
+// countingHandler is a minimal slog.Handler that only counts how many
+// records it receives, for asserting on warning dedup behavior.
+type countingHandler struct {
+	mu    sync.Mutex
+	count int
+}
+
+func (h *countingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *countingHandler) Handle(context.Context, slog.Record) error {
+	h.mu.Lock()
+	h.count++
+	h.mu.Unlock()
+	return nil
+}
+
+func (h *countingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *countingHandler) WithGroup(string) slog.Handler      { return h }
+
+func (h *countingHandler) Count() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.count
+}
+
+func TestCollector_VersionFailureWarnsOnlyOnce(t *testing.T) {
+	dir := t.TempDir()
+	configPath := writeTunnelConfig(t, dir)
+	addr := startManagementServerWithBadVersion(t)
+
+	handler := &countingHandler{}
+	c := New([]Tunnel{{
+		Name:              "office",
+		ManagementAddress: addr,
+		ConfigPath:        configPath,
+		Timeout:           2 * time.Second,
+	}}, slog.New(handler))
+
+	if _, err := gather(c); err != nil {
+		t.Fatalf("gathering metrics (1st scrape): %v", err)
+	}
+	if _, err := gather(c); err != nil {
+		t.Fatalf("gathering metrics (2nd scrape): %v", err)
+	}
+
+	if got := handler.Count(); got != 1 {
+		t.Errorf("logger received %d warnings across 2 scrapes, want exactly 1", got)
+	}
 }
 
 // gather registers c on a fresh registry, serves it over HTTP exactly like

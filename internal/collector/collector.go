@@ -36,6 +36,13 @@ type Tunnel struct {
 type Collector struct {
 	tunnels []Tunnel
 	logger  *slog.Logger
+
+	// versionWarned tracks, per tunnel name, whether a "version" command
+	// failure has already been logged, so a persistently old/non-conforming
+	// management API warns once rather than on every scrape. Guarded by a
+	// mutex since Collect scrapes tunnels concurrently.
+	versionWarnedMu sync.Mutex
+	versionWarned   map[string]bool
 }
 
 // New builds a Collector for the given tunnels. logger may be nil, in which
@@ -44,7 +51,27 @@ func New(tunnels []Tunnel, logger *slog.Logger) *Collector {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &Collector{tunnels: tunnels, logger: logger}
+	return &Collector{tunnels: tunnels, logger: logger, versionWarned: make(map[string]bool)}
+}
+
+// warnVersionOnce logs a "version" command failure for tunnel at most once
+// until it next succeeds (see clearVersionWarned).
+func (c *Collector) warnVersionOnce(tunnel string, err error) {
+	c.versionWarnedMu.Lock()
+	alreadyWarned := c.versionWarned[tunnel]
+	c.versionWarned[tunnel] = true
+	c.versionWarnedMu.Unlock()
+	if !alreadyWarned {
+		c.logger.Warn("tunnel version unavailable", "tunnel", tunnel, "error", err)
+	}
+}
+
+// clearVersionWarned re-arms warnVersionOnce for tunnel after a successful
+// "version" command.
+func (c *Collector) clearVersionWarned(tunnel string) {
+	c.versionWarnedMu.Lock()
+	delete(c.versionWarned, tunnel)
+	c.versionWarnedMu.Unlock()
 }
 
 var (
@@ -73,6 +100,16 @@ var (
 		"Duration of the last management interface scrape, including failed attempts.",
 		[]string{"tunnel"}, nil,
 	)
+	infoDesc = prometheus.NewDesc(
+		"openvpn_tunnel_info",
+		"Always 1; carries the OpenVPN version running this tunnel as a label.",
+		[]string{"tunnel", "version"}, nil,
+	)
+	stateSinceDesc = prometheus.NewDesc(
+		"openvpn_tunnel_state_since_timestamp_seconds",
+		"Unix timestamp at which the tunnel entered its current state (see openvpn_tunnel_state).",
+		[]string{"tunnel"}, nil,
+	)
 )
 
 // Describe implements prometheus.Collector.
@@ -82,6 +119,8 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- bytesDesc
 	ch <- certExpiryDesc
 	ch <- scrapeDurationDesc
+	ch <- infoDesc
+	ch <- stateSinceDesc
 }
 
 // Collect implements prometheus.Collector. Every tunnel is scraped
@@ -125,6 +164,19 @@ func (c *Collector) collectTunnel(ch chan<- prometheus.Metric, t Tunnel) {
 		emitBytes("tunnel", "out", stats.TunWriteBytes)
 		emitBytes("link", "in", stats.LinkReadBytes)
 		emitBytes("link", "out", stats.LinkWriteBytes)
+
+		if stats.Version != "" {
+			c.clearVersionWarned(t.Name)
+			ch <- prometheus.MustNewConstMetric(infoDesc, prometheus.GaugeValue, 1, t.Name, stats.Version)
+		} else if stats.VersionErr != nil {
+			c.warnVersionOnce(t.Name, stats.VersionErr)
+		}
+
+		if !stats.StateSince.IsZero() {
+			ch <- prometheus.MustNewConstMetric(stateSinceDesc, prometheus.GaugeValue, float64(stats.StateSince.Unix()), t.Name)
+		} else if stats.StateSinceErr != nil {
+			c.logger.Warn("tunnel state timestamp unavailable", "tunnel", t.Name, "error", stats.StateSinceErr)
+		}
 	}
 
 	var certList []openvpn.Certificate
