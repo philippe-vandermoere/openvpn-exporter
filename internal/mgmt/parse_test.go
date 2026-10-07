@@ -1,28 +1,35 @@
 package mgmt
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestParseStateLines(t *testing.T) {
 	tests := []struct {
-		name    string
-		lines   []string
-		want    string
-		wantErr bool
+		name      string
+		lines     []string
+		want      string
+		wantSince time.Time
+		wantErr   bool
 	}{
 		{
-			name:  "connected",
-			lines: []string{"1622547600,CONNECTED,SUCCESS,10.8.0.2,203.0.113.5,1194,,"},
-			want:  "CONNECTED",
+			name:      "connected",
+			lines:     []string{"1622547600,CONNECTED,SUCCESS,10.8.0.2,203.0.113.5,1194,,"},
+			want:      "CONNECTED",
+			wantSince: time.Unix(1622547600, 0),
 		},
 		{
-			name:  "reconnecting",
-			lines: []string{"1622547600,RECONNECTING,internal-error,,,,,"},
-			want:  "RECONNECTING",
+			name:      "reconnecting",
+			lines:     []string{"1622547600,RECONNECTING,internal-error,,,,,"},
+			want:      "RECONNECTING",
+			wantSince: time.Unix(1622547600, 0),
 		},
 		{
-			name:  "uses last line when several are present",
-			lines: []string{"1622547500,CONNECTING,,,,,,", "1622547600,CONNECTED,SUCCESS,10.8.0.2,203.0.113.5,1194,,"},
-			want:  "CONNECTED",
+			name:      "uses last line when several are present",
+			lines:     []string{"1622547500,CONNECTING,,,,,,", "1622547600,CONNECTED,SUCCESS,10.8.0.2,203.0.113.5,1194,,"},
+			want:      "CONNECTED",
+			wantSince: time.Unix(1622547600, 0),
 		},
 		{
 			name:    "empty response",
@@ -41,7 +48,82 @@ func TestParseStateLines(t *testing.T) {
 			got, err := parseStateLines(tt.lines)
 			if tt.wantErr {
 				if err == nil {
-					t.Fatalf("expected an error, got state %q", got)
+					t.Fatalf("expected an error, got state %+v", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got.State != tt.want {
+				t.Errorf("State = %q, want %q", got.State, tt.want)
+			}
+			if !got.Since.Equal(tt.wantSince) {
+				t.Errorf("Since = %v, want %v", got.Since, tt.wantSince)
+			}
+			if got.SinceErr != nil {
+				t.Errorf("SinceErr = %v, want nil", got.SinceErr)
+			}
+		})
+	}
+}
+
+func TestParseStateLines_UnparsableTimestampOnlyDropsSince(t *testing.T) {
+	got, err := parseStateLines([]string{"not-a-timestamp,CONNECTED,SUCCESS,10.8.0.2,203.0.113.5,1194,,"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.State != "CONNECTED" {
+		t.Errorf("State = %q, want CONNECTED", got.State)
+	}
+	if !got.Since.IsZero() {
+		t.Errorf("Since = %v, want zero", got.Since)
+	}
+	if got.SinceErr == nil {
+		t.Error("expected SinceErr to be set, got nil")
+	}
+}
+
+func TestParseVersionLines(t *testing.T) {
+	tests := []struct {
+		name    string
+		lines   []string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:  "real OpenVPN 2.6.20 response",
+			lines: []string{"OpenVPN Version: OpenVPN 2.6.20 x86_64-alpine-linux-musl [SSL (OpenSSL)] [LZO] [LZ4] [EPOLL] [MH/PKTINFO] [AEAD]", "Management Version: 5"},
+			want:  "2.6.20",
+		},
+		{
+			name:  "real OpenVPN 2.5.6 response",
+			lines: []string{"OpenVPN Version: OpenVPN 2.5.6 x86_64-alpine-linux-musl [SSL (OpenSSL)] [LZO] [LZ4] [EPOLL] [MH/PKTINFO] [AEAD] built on Apr 17 2022", "Management Version: 3"},
+			want:  "2.5.6",
+		},
+		{
+			name:    "missing OpenVPN Version line",
+			lines:   []string{"Management Version: 5"},
+			wantErr: true,
+		},
+		{
+			name:    "empty response",
+			lines:   nil,
+			wantErr: true,
+		},
+		{
+			name:    "prefix with nothing after it",
+			lines:   []string{"OpenVPN Version: OpenVPN "},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseVersionLines(tt.lines)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected an error, got version %q", got)
 				}
 				return
 			}
