@@ -12,7 +12,7 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - run: helm lint charts/openvpn-exporter
       - run: helm package charts/openvpn-exporter --destination dist
       - name: Login to GHCR
