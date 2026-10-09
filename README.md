@@ -265,8 +265,11 @@ that a server outage is correctly reflected as
 `openvpn_tunnel_up` stays 1 throughout, since the management interface
 itself — which lives in the still-running OpenVPN client process — remains
 reachable; `up` reflects management interface reachability, not the
-`CONNECTED` state specifically). Requires Docker with `NET_ADMIN` and
-`/dev/net/tun` support.
+`CONNECTED` state specifically). A separate `exporter_server` monitors
+`openvpn-server` itself, checking `openvpn_server_clients_connected`
+(all three clients above) and the per-client `openvpn_server_client_*`
+metrics against them. Requires Docker with `NET_ADMIN` and `/dev/net/tun`
+support.
 
 ## CI/CD
 

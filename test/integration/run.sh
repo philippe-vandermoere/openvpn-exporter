@@ -6,8 +6,9 @@
 # client reads ca+cert via config_path, mounting that client's full PKI
 # directory (its private key is 600/root-owned and genuinely unreadable by
 # the exporter's non-root UID — proving the "key never opened" guarantee
-# against a real file, not just a unit test). Requires Docker with
-# NET_ADMIN/tun support.
+# against a real file, not just a unit test). A separate exporter monitors
+# openvpn-server itself (openvpn_server_* metrics, one series per connected
+# client above). Requires Docker with NET_ADMIN/tun support.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -28,6 +29,7 @@ fail() {
     echo "--- exporter_26 logs ---"; $COMPOSE logs exporter_26 || true
     echo "--- exporter_25 logs ---"; $COMPOSE logs exporter_25 || true
     echo "--- exporter_27 logs ---"; $COMPOSE logs exporter_27 || true
+    echo "--- exporter_server logs ---"; $COMPOSE logs exporter_server || true
     echo "--- openvpn-server logs ---"; $COMPOSE logs openvpn-server || true
     echo "--- openvpn_26 logs ---"; $COMPOSE logs openvpn_26 || true
     echo "--- openvpn_25 logs ---"; $COMPOSE logs openvpn_25 || true
@@ -58,6 +60,7 @@ completed_count() {
 metrics1() { curl -fsS http://localhost:9176/metrics 2>/dev/null || true; }
 metrics2() { curl -fsS http://localhost:9177/metrics 2>/dev/null || true; }
 metrics3() { curl -fsS http://localhost:9178/metrics 2>/dev/null || true; }
+metrics4() { curl -fsS http://localhost:9179/metrics 2>/dev/null || true; }
 
 # mgmt_check runs against a service's own management interface via its
 # loopback (nc is reachable inside the container regardless of host port
@@ -115,8 +118,8 @@ echo "openvpn_27 accepts its own password -- ok"
 mgmt_check openvpn_27 "$OPENVPN_26_MGMT_PASSWORD" | grep -q "SUCCESS" && fail "openvpn_27 accepted openvpn_26's password"
 echo "openvpn_27 rejects openvpn_26's password -- ok"
 
-mgmt_check openvpn-server "$server_password" | grep -q "SUCCESS" || fail "server rejected its own (random) password"
-echo "server accepts its own randomly-generated password -- ok"
+mgmt_check openvpn-server "$server_password" | grep -q "SUCCESS" || fail "server rejected its own configured password"
+echo "server accepts its own configured password -- ok"
 mgmt_check openvpn-server "$OPENVPN_26_MGMT_PASSWORD" | grep -q "SUCCESS" && fail "server accepted openvpn_26's password"
 echo "server rejects openvpn_26's password -- ok"
 
@@ -146,6 +149,17 @@ echo "--- checking traffic counters ---"
 metrics1 | grep -q 'openvpn_tunnel_bytes_total{channel="link",direction="in",tunnel="openvpn_26"}' || fail "exporter_26: missing traffic counters"
 metrics2 | grep -q 'openvpn_tunnel_bytes_total{channel="link",direction="in",tunnel="openvpn_25"}' || fail "exporter_25: missing traffic counters"
 metrics3 | grep -q 'openvpn_tunnel_bytes_total{channel="link",direction="in",tunnel="openvpn_27"}' || fail "exporter_27: missing traffic counters"
+echo "ok"
+
+wait_for "exporter_server up" 'metrics4 | grep -q '\''openvpn_server_up{server="vpn-server"} 1'\''' 60
+
+echo "--- checking server-side per-client metrics (openvpn-server monitored directly) ---"
+metrics4 | grep -q 'openvpn_server_clients_connected{server="vpn-server"} 3' || fail "exporter_server: expected 3 connected clients"
+metrics4 | grep -q 'openvpn_server_client_info{.*common_name="openvpn_26".*server="vpn-server"' || fail "exporter_server: missing client_info for openvpn_26"
+metrics4 | grep -q 'openvpn_server_client_bytes_total{common_name="openvpn_26",direction="in",server="vpn-server"}' || fail "exporter_server: missing inbound bytes for openvpn_26"
+metrics4 | grep -q 'openvpn_server_client_bytes_total{common_name="openvpn_26",direction="out",server="vpn-server"}' || fail "exporter_server: missing outbound bytes for openvpn_26"
+metrics4 | grep -q 'openvpn_server_client_connected_since_timestamp_seconds{common_name="openvpn_26",server="vpn-server"}' || fail "exporter_server: missing connected-since for openvpn_26"
+metrics4 | grep -qE 'openvpn_server_info\{server="vpn-server",version="2\.6\.[0-9]+"\} 1' || fail "exporter_server: missing/wrong version info metric"
 echo "ok"
 
 echo "--- stopping openvpn-server to exercise a reconnection ---"

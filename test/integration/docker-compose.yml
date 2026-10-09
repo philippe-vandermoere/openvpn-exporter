@@ -23,6 +23,7 @@ services:
       - /dev/net/tun
     environment:
       OPENVPN_ROLE: server
+      OPENVPN_MANAGEMENT_PASSWORD: ${SERVER_MGMT_PASSWORD}
     volumes:
       - pki-server-data:/pki:ro
 
@@ -133,6 +134,20 @@ services:
       - pki-openvpn_27-data:/pki:ro
     ports:
       - "127.0.0.1:9178:9176"
+
+  # Monitors openvpn-server itself (not a client): openvpn_server_* metrics,
+  # one series per connected client (openvpn_26/openvpn_25/openvpn_27 above).
+  exporter_server:
+    build: ../..
+    depends_on:
+      - openvpn-server
+    environment:
+      OPENVPN_EXPORTER_SERVER_NAME: vpn-server
+      OPENVPN_EXPORTER_SERVER_MANAGEMENT_ADDRESS: openvpn-server:7504
+      OPENVPN_EXPORTER_PASSWORD: ${SERVER_MGMT_PASSWORD}
+      OPENVPN_EXPORTER_SCRAPE_TIMEOUT: 3s
+    ports:
+      - "127.0.0.1:9179:9176"
 
 volumes:
   pki-server-data:
