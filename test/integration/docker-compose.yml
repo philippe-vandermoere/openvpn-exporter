@@ -4,8 +4,9 @@ services:
     entrypoint: ["sh", "/pki-init.sh"]
     volumes:
       - pki-server-data:/pki-server
-      - pki-client1-data:/pki-client1
-      - pki-client2-data:/pki-client2
+      - pki-openvpn_26-data:/pki-openvpn_26
+      - pki-openvpn_25-data:/pki-openvpn_25
+      - pki-openvpn_27-data:/pki-openvpn_27
       - ./pki-init.sh:/pki-init.sh:ro
 
   openvpn-server:
@@ -25,28 +26,7 @@ services:
     volumes:
       - pki-server-data:/pki:ro
 
-  # openvpn_26/openvpn_25 run genuinely different, real OpenVPN releases
-  # (2.6.x and 2.5.x respectively, see openvpn.Dockerfile's ALPINE_VERSION
-  # arg) so openvpn_tunnel_info's version parsing is exercised against more
-  # than one real version, not just mocked fixtures.
-  openvpn_26:
-    build:
-      context: .
-      dockerfile: openvpn.Dockerfile
-    image: openvpn-exporter-test-openvpn-26:local
-    depends_on:
-      - openvpn-server
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun
-    environment:
-      OPENVPN_ROLE: client
-      OPENVPN_REMOTE: openvpn-server
-      OPENVPN_MANAGEMENT_PASSWORD: ${CLIENT1_MGMT_PASSWORD}
-    volumes:
-      - pki-client1-data:/pki:ro
-
+  # openvpn 2.5
   openvpn_25:
     build:
       context: .
@@ -63,29 +43,9 @@ services:
     environment:
       OPENVPN_ROLE: client
       OPENVPN_REMOTE: openvpn-server
-      OPENVPN_MANAGEMENT_PASSWORD: ${CLIENT2_MGMT_PASSWORD}
+      OPENVPN_MANAGEMENT_PASSWORD: ${OPENVPN_25_MGMT_PASSWORD}
     volumes:
-      - pki-client2-data:/pki:ro
-
-  # Both exporters read ca+cert via config_path, mounting their client's
-  # full PKI directory read-only: ca.crt/tls.crt are 644, tls.key is 600 and
-  # root-owned, while the exporter itself runs as non-root (see the root
-  # Dockerfile) -- a real, not simulated, demonstration that the private key
-  # is never opened.
-  exporter_26:
-    build: ../..
-    depends_on:
-      - openvpn_26
-    environment:
-      OPENVPN_EXPORTER_TUNNEL_NAME: openvpn_26
-      OPENVPN_EXPORTER_TUNNEL_MANAGEMENT_ADDRESS: openvpn_26:7504
-      OPENVPN_EXPORTER_TUNNEL_CONFIG_PATH: /pki/client.conf
-      OPENVPN_EXPORTER_PASSWORD: ${CLIENT1_MGMT_PASSWORD}
-      OPENVPN_EXPORTER_SCRAPE_TIMEOUT: 3s
-    volumes:
-      - pki-client1-data:/pki:ro
-    ports:
-      - "127.0.0.1:9176:9176"
+      - pki-openvpn_25-data:/pki:ro
 
   exporter_25:
     build: ../..
@@ -95,14 +55,87 @@ services:
       OPENVPN_EXPORTER_TUNNEL_NAME: openvpn_25
       OPENVPN_EXPORTER_TUNNEL_MANAGEMENT_ADDRESS: openvpn_25:7504
       OPENVPN_EXPORTER_TUNNEL_CONFIG_PATH: /pki/client.conf
-      OPENVPN_EXPORTER_PASSWORD: ${CLIENT2_MGMT_PASSWORD}
+      OPENVPN_EXPORTER_PASSWORD: ${OPENVPN_25_MGMT_PASSWORD}
       OPENVPN_EXPORTER_SCRAPE_TIMEOUT: 3s
     volumes:
-      - pki-client2-data:/pki:ro
+      - pki-openvpn_25-data:/pki:ro
     ports:
       - "127.0.0.1:9177:9176"
 
+  # openvpn 2.6
+  openvpn_26:
+    build:
+      context: .
+      dockerfile: openvpn.Dockerfile
+    image: openvpn-exporter-test-openvpn-26:local
+    depends_on:
+      - openvpn-server
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    environment:
+      OPENVPN_ROLE: client
+      OPENVPN_REMOTE: openvpn-server
+      OPENVPN_MANAGEMENT_PASSWORD: ${OPENVPN_26_MGMT_PASSWORD}
+    volumes:
+      - pki-openvpn_26-data:/pki:ro
+
+  exporter_26:
+    build: ../..
+    depends_on:
+      - openvpn_26
+    environment:
+      OPENVPN_EXPORTER_TUNNEL_NAME: openvpn_26
+      OPENVPN_EXPORTER_TUNNEL_MANAGEMENT_ADDRESS: openvpn_26:7504
+      OPENVPN_EXPORTER_TUNNEL_CONFIG_PATH: /pki/client.conf
+      OPENVPN_EXPORTER_PASSWORD: ${OPENVPN_26_MGMT_PASSWORD}
+      OPENVPN_EXPORTER_SCRAPE_TIMEOUT: 3s
+    volumes:
+      - pki-openvpn_26-data:/pki:ro
+    ports:
+      - "127.0.0.1:9176:9176"
+
+  # openvpn 2.7 -- alpine:edge is the only Alpine tag currently carrying
+  # OpenVPN 2.7 (not yet in a stable numbered release) -- unlike the pinned
+  # 3.16/3.20 tags above, its package contents can shift over time.
+  openvpn_27:
+    build:
+      context: .
+      dockerfile: openvpn.Dockerfile
+      args:
+        ALPINE_VERSION: "edge"
+    image: openvpn-exporter-test-openvpn-27:local
+    depends_on:
+      - openvpn-server
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    environment:
+      OPENVPN_ROLE: client
+      OPENVPN_REMOTE: openvpn-server
+      OPENVPN_MANAGEMENT_PASSWORD: ${OPENVPN_27_MGMT_PASSWORD}
+    volumes:
+      - pki-openvpn_27-data:/pki:ro
+
+  exporter_27:
+    build: ../..
+    depends_on:
+      - openvpn_27
+    environment:
+      OPENVPN_EXPORTER_TUNNEL_NAME: openvpn_27
+      OPENVPN_EXPORTER_TUNNEL_MANAGEMENT_ADDRESS: openvpn_27:7504
+      OPENVPN_EXPORTER_TUNNEL_CONFIG_PATH: /pki/client.conf
+      OPENVPN_EXPORTER_PASSWORD: ${OPENVPN_27_MGMT_PASSWORD}
+      OPENVPN_EXPORTER_SCRAPE_TIMEOUT: 3s
+    volumes:
+      - pki-openvpn_27-data:/pki:ro
+    ports:
+      - "127.0.0.1:9178:9176"
+
 volumes:
   pki-server-data:
-  pki-client1-data:
-  pki-client2-data:
+  pki-openvpn_26-data:
+  pki-openvpn_25-data:
+  pki-openvpn_27-data:

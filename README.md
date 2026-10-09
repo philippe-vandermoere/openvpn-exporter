@@ -160,8 +160,9 @@ directory containing `config_path`, not the exporter's working directory);
 with `cert_path`, just that one file. If the exporter runs in a different
 container or host than the OpenVPN client, that means sharing a read-only
 mount for those files — see `test/integration/docker-compose.yml` for a
-worked example, including the minimal `cert_path`-only shape (a dedicated
-volume containing only the client certificate, nothing else).
+worked example: each exporter mounts its client's full PKI directory
+read-only, `config_path` reads the `ca`/`cert` from it, and the private key
+sitting right next to them (`600`, root-owned) is never opened.
 
 ## Building
 
@@ -193,26 +194,28 @@ go test ./... -race
 ```
 
 `test/integration/run.sh` (`make compose-test`) additionally spins up a real
-OpenVPN server and two real OpenVPN clients running different real OpenVPN
-releases — `openvpn_26` (2.6.x) and `openvpn_25` (2.5.x), via
-`test/integration/openvpn.Dockerfile`'s `ALPINE_VERSION` build arg — each
+OpenVPN server and three real OpenVPN clients running different real
+OpenVPN releases — `openvpn_26` (2.6.x), `openvpn_25` (2.5.x), and
+`openvpn_27` (2.7.x) — via
+`test/integration/openvpn.Dockerfile`'s `ALPINE_VERSION` build arg, each
 with its own identity and its own management password. One exporter per
 client reads `ca`/`cert` via `config_path`, mounting that client's full PKI
 directory read-only: `ca.crt`/`tls.crt` are world-readable but `tls.key` is
 `600` and root-owned, while the exporter itself runs as a fixed non-root UID
 (see the root `Dockerfile`) — a real, not simulated, demonstration that the
-private key is never opened. `openvpn-server`/`openvpn_26`/`openvpn_25`
-share that one Dockerfile (official `alpine` base plus the `openvpn`
-package, nothing else); its entrypoint writes the management password
-(given or randomly generated) and renders the config for its role. Only the
-exporters are built from this repository's root Dockerfile. The test checks
-PKI volume isolation (each client sees only its own cert/key, never another
-consumer's), that the private key really is `600` before relying on it,
-distinct and enforced management passwords, that both tunnels report up
-with certificate expiry, the correct real `openvpn_tunnel_info` version and
+private key is never opened. `openvpn-server`/`openvpn_26`/`openvpn_25`/
+`openvpn_27` share that one Dockerfile (official `alpine` base plus the
+`openvpn` package, nothing else); its entrypoint writes the management
+password (given or randomly generated) and renders the config for its role.
+Only the exporters are built from this repository's root Dockerfile. The
+test checks PKI volume isolation (each client sees only its own cert/key,
+never another consumer's), that the private key really is `600` before
+relying on it, distinct and enforced management passwords, that all three
+tunnels report up with certificate expiry, the correct real
+`openvpn_tunnel_info` version and
 `openvpn_tunnel_state_since_timestamp_seconds`, and traffic counters, and
 that a server outage is correctly reflected as
-`openvpn_tunnel_state{state="RECONNECTING"}` on both (note:
+`openvpn_tunnel_state{state="RECONNECTING"}` on all three (note:
 `openvpn_tunnel_up` stays 1 throughout, since the management interface
 itself — which lives in the still-running OpenVPN client process — remains
 reachable; `up` reflects management interface reachability, not the
