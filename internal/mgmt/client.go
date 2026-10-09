@@ -63,24 +63,11 @@ type Client struct {
 // current state and traffic counters, and closes the connection. It honors
 // ctx's deadline for the whole exchange.
 func (c *Client) FetchStats(ctx context.Context) (*Stats, error) {
-	var dialer net.Dialer
-	conn, err := dialer.DialContext(ctx, "tcp", c.Address)
+	r, conn, err := c.dialAndAuthenticate(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("dial %s: %w", c.Address, err)
-	}
-	defer func() { _ = conn.Close() }()
-
-	if deadline, ok := ctx.Deadline(); ok {
-		if err := conn.SetDeadline(deadline); err != nil {
-			return nil, fmt.Errorf("set deadline: %w", err)
-		}
-	}
-
-	r := bufio.NewReader(conn)
-
-	if err := c.authenticate(r, conn); err != nil {
 		return nil, err
 	}
+	defer func() { _ = conn.Close() }()
 
 	stateLines, err := runCommand(r, conn, "state")
 	if err != nil {
@@ -117,6 +104,33 @@ func (c *Client) FetchStats(ctx context.Context) (*Stats, error) {
 	}
 
 	return stats, nil
+}
+
+// dialAndAuthenticate opens a new connection to the management interface,
+// applies ctx's deadline to it, and authenticates (if the interface requires
+// a password). The caller owns the returned connection and must close it.
+func (c *Client) dialAndAuthenticate(ctx context.Context) (*bufio.Reader, net.Conn, error) {
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "tcp", c.Address)
+	if err != nil {
+		return nil, nil, fmt.Errorf("dial %s: %w", c.Address, err)
+	}
+
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := conn.SetDeadline(deadline); err != nil {
+			_ = conn.Close()
+			return nil, nil, fmt.Errorf("set deadline: %w", err)
+		}
+	}
+
+	r := bufio.NewReader(conn)
+
+	if err := c.authenticate(r, conn); err != nil {
+		_ = conn.Close()
+		return nil, nil, err
+	}
+
+	return r, conn, nil
 }
 
 // authenticate consumes the management interface's initial greeting and, if

@@ -392,8 +392,10 @@ func TestCollector_VersionFailureWarnsOnlyOnce(t *testing.T) {
 }
 
 // gather registers c on a fresh registry, serves it over HTTP exactly like
-// the real exporter does, and returns the scraped body as text.
-func gather(c *Collector) (string, error) {
+// the real exporter does, and returns the scraped body as text. Takes the
+// prometheus.Collector interface so it's reusable for both Collector and
+// ServerCollector.
+func gather(c prometheus.Collector) (string, error) {
 	registry := prometheus.NewRegistry()
 	if err := registry.Register(c); err != nil {
 		return "", err

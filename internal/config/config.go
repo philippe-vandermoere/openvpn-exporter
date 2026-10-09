@@ -29,6 +29,8 @@ const (
 	envTunnelConfigPath  = "OPENVPN_EXPORTER_TUNNEL_CONFIG_PATH"
 	envTunnelCertPath    = "OPENVPN_EXPORTER_TUNNEL_CERT_PATH"
 	envTunnelsGlob       = "OPENVPN_EXPORTER_TUNNELS_GLOB"
+	envServerName        = "OPENVPN_EXPORTER_SERVER_NAME"
+	envServerMgmtAddress = "OPENVPN_EXPORTER_SERVER_MANAGEMENT_ADDRESS"
 )
 
 // Duration wraps time.Duration to support YAML values like "5s" as well as
@@ -79,12 +81,29 @@ type Tunnel struct {
 	Password string `yaml:"password"`
 }
 
+// Server describes a single OpenVPN *server* process to monitor (as opposed
+// to a Tunnel, which monitors a client). Exposes a different metric family
+// entirely (openvpn_server_*): per-connected-client info/traffic/connection
+// time, not tunnel state/certificate expiry.
+type Server struct {
+	Name              string `yaml:"name"`
+	ManagementAddress string `yaml:"management_address"`
+
+	// Password overrides Config.Password for this server specifically.
+	// Empty means "use the global password".
+	Password string `yaml:"password"`
+}
+
 // Config is the fully resolved exporter configuration.
 type Config struct {
 	ListenAddress string   `yaml:"listen_address"`
 	ScrapeTimeout Duration `yaml:"scrape_timeout"`
 	PasswordFile  string   `yaml:"password_file"`
 	Tunnels       []Tunnel `yaml:"tunnels"`
+
+	// Servers is the list of OpenVPN servers to monitor, independent of
+	// Tunnels — an exporter instance may monitor tunnels, servers, or both.
+	Servers []Server `yaml:"servers"`
 
 	// TunnelsGlob, if set, is expanded at load time: every matched file
 	// becomes an additional tunnel (added to Tunnels, not replacing it).
@@ -181,6 +200,16 @@ func applyEnvOverrides(cfg *Config) error {
 		}
 	}
 
+	if len(cfg.Servers) == 0 {
+		server, present, err := serverFromEnv()
+		if err != nil {
+			return err
+		}
+		if present {
+			cfg.Servers = []Server{server}
+		}
+	}
+
 	return nil
 }
 
@@ -200,6 +229,22 @@ func tunnelFromEnv() (Tunnel, bool, error) {
 		)
 	}
 	return Tunnel{Name: name, ManagementAddress: addr, ConfigPath: configPath, CertPath: certPath}, true, nil
+}
+
+func serverFromEnv() (Server, bool, error) {
+	name := os.Getenv(envServerName)
+	addr := os.Getenv(envServerMgmtAddress)
+
+	if name == "" && addr == "" {
+		return Server{}, false, nil
+	}
+	if name == "" || addr == "" {
+		return Server{}, false, fmt.Errorf(
+			"%s and %s must both be set to define a server from environment variables",
+			envServerName, envServerMgmtAddress,
+		)
+	}
+	return Server{Name: name, ManagementAddress: addr}, true, nil
 }
 
 func setDefaults(cfg *Config) {
@@ -280,9 +325,9 @@ func expandTunnelsGlob(cfg *Config) error {
 }
 
 func validate(cfg *Config) error {
-	if len(cfg.Tunnels) == 0 {
-		return fmt.Errorf("no tunnels configured: set tunnels in the config file or %s/%s/%s",
-			envTunnelName, envTunnelMgmtAddress, envTunnelConfigPath)
+	if len(cfg.Tunnels) == 0 && len(cfg.Servers) == 0 {
+		return fmt.Errorf("no tunnels or servers configured: set tunnels/servers in the config file or %s/%s/%s or %s/%s",
+			envTunnelName, envTunnelMgmtAddress, envTunnelConfigPath, envServerName, envServerMgmtAddress)
 	}
 
 	seen := make(map[string]bool, len(cfg.Tunnels))
@@ -314,6 +359,28 @@ func validate(cfg *Config) error {
 			if _, err := os.Stat(t.CertPath); err != nil {
 				return fmt.Errorf("tunnel %q: cert_path %q is not accessible: %w", t.Name, t.CertPath, err)
 			}
+		}
+	}
+
+	// Servers are validated the same way as tunnels, but in their own
+	// namespace: a server and a tunnel sharing a name is harmless, since
+	// they surface as entirely different metrics (openvpn_server_* vs
+	// openvpn_tunnel_*).
+	seenServers := make(map[string]bool, len(cfg.Servers))
+	for i, s := range cfg.Servers {
+		if s.Name == "" {
+			return fmt.Errorf("server[%d]: name is required", i)
+		}
+		if seenServers[s.Name] {
+			return fmt.Errorf("server[%d]: duplicate server name %q", i, s.Name)
+		}
+		seenServers[s.Name] = true
+
+		if s.ManagementAddress == "" {
+			return fmt.Errorf("server %q: management_address is required", s.Name)
+		}
+		if _, _, err := net.SplitHostPort(s.ManagementAddress); err != nil {
+			return fmt.Errorf("server %q: invalid management_address %q: %w", s.Name, s.ManagementAddress, err)
 		}
 	}
 

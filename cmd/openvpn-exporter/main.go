@@ -1,7 +1,7 @@
 // Command openvpn-exporter exposes Prometheus metrics for one or more
-// OpenVPN client tunnels: connection state, traffic counters (read from the
-// management interface), and certificate expiry (read from the client
-// configuration file).
+// OpenVPN client tunnels (connection state, traffic counters, and
+// certificate expiry) and/or OpenVPN servers (connected clients and their
+// traffic/connection info), both read from the management interface.
 package main
 
 import (
@@ -51,11 +51,24 @@ func main() {
 		})
 	}
 
+	servers := make([]collector.Server, 0, len(cfg.Servers))
+	for _, s := range cfg.Servers {
+		servers = append(servers, collector.Server{
+			Name:              s.Name,
+			ManagementAddress: s.ManagementAddress,
+			Password:          cmp.Or(s.Password, cfg.Password),
+			Timeout:           cfg.ScrapeTimeoutDuration(),
+		})
+	}
+
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		collector.New(tunnels, logger),
 	)
+	if len(servers) > 0 {
+		registry.MustRegister(collector.NewServerCollector(servers, logger))
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
@@ -83,7 +96,7 @@ func main() {
 		}
 	}()
 
-	logger.Info("listening", "address", cfg.ListenAddress, "tunnels", len(tunnels))
+	logger.Info("listening", "address", cfg.ListenAddress, "tunnels", len(tunnels), "servers", len(servers))
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("server error", "error", err)
 		os.Exit(1)

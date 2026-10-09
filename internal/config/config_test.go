@@ -15,6 +15,7 @@ func clearEnv(t *testing.T) {
 	for _, key := range []string{
 		envConfigPath, envListenAddress, envScrapeTimeout, envPassword, envPasswordFile,
 		envTunnelName, envTunnelMgmtAddress, envTunnelConfigPath, envTunnelCertPath, envTunnelsGlob,
+		envServerName, envServerMgmtAddress,
 	} {
 		t.Setenv(key, "")
 	}
@@ -532,5 +533,137 @@ func TestLoad_TunnelsGlobPasswordFile_UnreadableAndNoGlobalPasswordIsAnError(t *
 
 	if _, err := Load(yamlPath); err == nil {
 		t.Fatal("expected an error: password file unreadable and no global password configured")
+	}
+}
+
+func TestLoad_ServersYAML(t *testing.T) {
+	clearEnv(t)
+
+	yamlContent := `
+servers:
+  - name: vpn-gw-1
+    management_address: 127.0.0.1:7600
+  - name: vpn-gw-2
+    management_address: 127.0.0.1:7601
+    password: gw2-password
+`
+	yamlPath := writeTempFile(t, "config.yaml", yamlContent)
+
+	cfg, err := Load(yamlPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Servers) != 2 {
+		t.Fatalf("got %d servers, want 2", len(cfg.Servers))
+	}
+	if cfg.Servers[0].Name != "vpn-gw-1" || cfg.Servers[0].ManagementAddress != "127.0.0.1:7600" {
+		t.Errorf("unexpected server[0]: %+v", cfg.Servers[0])
+	}
+	if cfg.Servers[1].Password != "gw2-password" {
+		t.Errorf("server[1].Password = %q, want gw2-password", cfg.Servers[1].Password)
+	}
+}
+
+func TestLoad_ServerOnlyNoTunnelsIsValid(t *testing.T) {
+	clearEnv(t)
+
+	yamlContent := `
+servers:
+  - name: vpn-gw-1
+    management_address: 127.0.0.1:7600
+`
+	yamlPath := writeTempFile(t, "config.yaml", yamlContent)
+
+	cfg, err := Load(yamlPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Tunnels) != 0 {
+		t.Errorf("got %d tunnels, want 0", len(cfg.Tunnels))
+	}
+	if len(cfg.Servers) != 1 {
+		t.Errorf("got %d servers, want 1", len(cfg.Servers))
+	}
+}
+
+func TestLoad_DuplicateServerNames(t *testing.T) {
+	clearEnv(t)
+
+	yamlContent := `
+servers:
+  - name: vpn-gw
+    management_address: 127.0.0.1:7600
+  - name: vpn-gw
+    management_address: 127.0.0.1:7601
+`
+	yamlPath := writeTempFile(t, "config.yaml", yamlContent)
+
+	if _, err := Load(yamlPath); err == nil {
+		t.Fatal("expected an error for duplicate server names, got nil")
+	}
+}
+
+func TestLoad_InvalidServerManagementAddress(t *testing.T) {
+	clearEnv(t)
+
+	yamlContent := `
+servers:
+  - name: vpn-gw
+    management_address: "not-a-host-port"
+`
+	yamlPath := writeTempFile(t, "config.yaml", yamlContent)
+
+	if _, err := Load(yamlPath); err == nil {
+		t.Fatal("expected an error for invalid server management_address, got nil")
+	}
+}
+
+func TestLoad_TunnelAndServerNameCollisionIsNotAnError(t *testing.T) {
+	clearEnv(t)
+
+	tunnelConfig := writeTempFile(t, "shared.conf", "client\n")
+	yamlContent := `
+tunnels:
+  - name: shared
+    management_address: 127.0.0.1:7505
+    config_path: ` + tunnelConfig + `
+servers:
+  - name: shared
+    management_address: 127.0.0.1:7600
+`
+	yamlPath := writeTempFile(t, "config.yaml", yamlContent)
+
+	if _, err := Load(yamlPath); err != nil {
+		t.Fatalf("Load: %v (tunnel/server names are separate namespaces)", err)
+	}
+}
+
+func TestLoad_EnvVarSingleServer(t *testing.T) {
+	clearEnv(t)
+
+	t.Setenv(envServerName, "vpn-gw")
+	t.Setenv(envServerMgmtAddress, "127.0.0.1:7600")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Servers) != 1 {
+		t.Fatalf("got %d servers, want 1", len(cfg.Servers))
+	}
+	server := cfg.Servers[0]
+	if server.Name != "vpn-gw" || server.ManagementAddress != "127.0.0.1:7600" {
+		t.Errorf("unexpected server: %+v", server)
+	}
+}
+
+func TestLoad_EnvVarPartialServerIsAnError(t *testing.T) {
+	clearEnv(t)
+
+	t.Setenv(envServerName, "vpn-gw")
+	// Management address deliberately left unset.
+
+	if _, err := Load(""); err == nil {
+		t.Fatal("expected an error for a partially specified env server, got nil")
 	}
 }

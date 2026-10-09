@@ -1,11 +1,12 @@
 # openvpn-exporter
 
-A single Prometheus exporter for OpenVPN client tunnels: connection state,
-traffic counters, and certificate expiry, all under one `openvpn_` metric
-prefix and a common `tunnel` label. It replaces the combination of
-`node_exporter` + `openvpn_exporter` + `x509-certificate-exporter`, which
-between them use inconsistent metric prefixes and, individually, none of
-them covers the full need.
+A single Prometheus exporter for OpenVPN **client tunnels** (connection
+state, traffic counters, and certificate expiry) and/or OpenVPN **servers**
+(connected clients and their traffic/connection info), all under one
+`openvpn_` metric prefix. It replaces the combination of `node_exporter` +
+`openvpn_exporter` + `x509-certificate-exporter`, which between them use
+inconsistent metric prefixes and, individually, none of them covers the full
+need. An exporter instance can monitor tunnels, servers, or both at once.
 
 - Connection state and traffic counters are read from OpenVPN's management
   interface. A short-lived connection is opened per scrape and closed
@@ -42,6 +43,29 @@ Suggested alerting (not shipped with this repository):
 - Certificate expiring soon: `openvpn_tunnel_cert_expiry_timestamp_seconds - time() < 30 * 86400`.
 - Unstable tunnel: `changes(openvpn_tunnel_up[15m]) > N`.
 
+## Server metrics
+
+Monitoring an OpenVPN **server** process (see `servers:`/`OPENVPN_EXPORTER_SERVER_*` below) exposes
+a different metric family, keyed by `server` and, for the per-client metrics, also by `common_name`:
+
+| Metric | Type | Labels | Notes |
+|---|---|---|---|
+| `openvpn_server_up` | gauge | `server` | 1 if the management interface responded, 0 otherwise. |
+| `openvpn_server_clients_connected` | gauge | `server` | Number of clients currently connected. Absent when the management interface is unreachable. |
+| `openvpn_server_client_info` | gauge | `server`, `common_name`, `real_address`, `virtual_address`, `username`, `cipher` | Always 1, one series per connected client. `real_address` is the client's WAN-side `ip:port`, `virtual_address` its assigned VPN IP, `username` is `UNDEF` unless `auth-user-pass` is in use. |
+| `openvpn_server_client_bytes_total` | counter | `server`, `common_name`, `direction` (`in`\|`out`) | Per-client traffic. Resets whenever that client reconnects — use `rate()`/`increase()`, not the raw value. |
+| `openvpn_server_client_connected_since_timestamp_seconds` | gauge | `server`, `common_name` | Unix timestamp at which this client connected. |
+| `openvpn_server_info` | gauge | `server`, `version` | Always 1; `version` is the OpenVPN release running this server. Same failure handling as `openvpn_tunnel_info`'s `version` (absent + warned at most once per server on failure, never fails the scrape). |
+| `openvpn_server_scrape_duration_seconds` | gauge | `server` | Duration of the last management interface scrape, including failed attempts. |
+
+`clients_connected`, `client_info`, `client_bytes_total`, and `client_connected_since_timestamp_seconds`
+all come from a single `status 3` command (`server_info`'s `version` is the one additional
+round-trip, same two-command shape as a tunnel scrape) — no partial series if the scrape fails
+(same "down means nothing partial" principle as tunnels). **Cardinality note:** the three
+`common_name`-labeled series multiply by the number of currently connected clients — fine for the
+typical few-to-low-hundreds range, worth keeping in mind for a server with thousands of road-warrior
+clients.
+
 ## Configuration
 
 ### YAML file
@@ -57,11 +81,18 @@ tunnels:
   - name: backup
     management_address: 127.0.0.1:7506
     cert_path: /etc/openvpn/client/backup.crt      # tracks that one cert only
+servers:
+  - name: vpn-gw-1
+    management_address: 127.0.0.1:7600
 ```
 
 Pass the file with `--config /path/to/config.yaml`. Startup fails fast if a
 tunnel name is duplicated, a `management_address` doesn't parse as
-`host:port`, or a `config_path`/`cert_path` that is set isn't readable.
+`host:port`, or a `config_path`/`cert_path` that is set isn't readable; the
+same checks apply to `servers:` (tunnel and server names are independent —
+one of each sharing a name is fine). At least one tunnel or server must be
+configured. `servers:` entries support an optional per-server `password`,
+same fallback-to-global rule as a tunnel's.
 
 ### Discovering tunnels automatically: `tunnels_glob`
 
@@ -133,6 +164,8 @@ used, and always take precedence over the corresponding YAML value:
 | `OPENVPN_EXPORTER_PASSWORD_FILE` | `password_file` |
 | `OPENVPN_EXPORTER_PASSWORD` | the password value itself, not a path — takes precedence over `OPENVPN_EXPORTER_PASSWORD_FILE`/`password_file` if both are set. Useful when the secret is already injected as an environment variable (Docker/Kubernetes secret) rather than mounted as a file. |
 | `OPENVPN_EXPORTER_TUNNELS_GLOB` | `tunnels_glob` |
+| `OPENVPN_EXPORTER_SERVER_NAME` | single-server `servers[0].name` (see below) |
+| `OPENVPN_EXPORTER_SERVER_MANAGEMENT_ADDRESS` | single-server `servers[0].management_address` |
 
 If no YAML tunnels are defined, a single tunnel can be declared entirely via
 environment variables — a natural fit for a one-exporter-per-sidecar
@@ -150,6 +183,19 @@ OPENVPN_EXPORTER_TUNNEL_CERT_PATH=/etc/openvpn/client/office.crt
 must both be set together; `CONFIG_PATH`/`CERT_PATH` are optional, same
 precedence rule as the YAML fields above. The multi-tunnel `tunnels:` list
 is only available via YAML.
+
+Likewise for a single server, if no YAML `servers:` are defined:
+
+```
+OPENVPN_EXPORTER_SERVER_NAME=vpn-gw-1
+OPENVPN_EXPORTER_SERVER_MANAGEMENT_ADDRESS=127.0.0.1:7600
+```
+
+`OPENVPN_EXPORTER_SERVER_NAME` and `OPENVPN_EXPORTER_SERVER_MANAGEMENT_ADDRESS`
+must both be set together. Tunnel and server env vars are independent — an
+exporter instance can be given both a tunnel and a server this way at once.
+The multi-server `servers:` list, like `tunnels:`, is only available via
+YAML.
 
 ### Filesystem access
 
