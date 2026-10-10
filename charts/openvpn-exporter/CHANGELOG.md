@@ -11,6 +11,8 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-10
+
 ### Added
 
 - `config.server`/`config.servers`: monitor one or several OpenVPN
@@ -28,6 +30,7 @@ and this project uses [Semantic Versioning](https://semver.org/).
   `/etc/openvpn/{client,server}/*.conf`), matching the exporter's own
   rename. Not backwards compatible — update any existing values using the
   old name.
+- Bumped `appVersion` to 0.4.0 — see the exporter changelog.
 
 ## [0.5.0] - 2026-10-07
 
@@ -65,7 +68,8 @@ and this project uses [Semantic Versioning](https://semver.org/).
   configuration (`config.tunnel`), password Secret reference, Service,
   optional Prometheus Operator `ServiceMonitor`, liveness/readiness probes.
 
-[Unreleased]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/chart-v0.5.0...HEAD
+[Unreleased]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/chart-v0.6.0...HEAD
+[0.6.0]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/chart-v0.5.0...chart-v0.6.0
 [0.5.0]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/chart-v0.4.0...chart-v0.5.0
 [0.4.0]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/chart-v0.2.0...chart-v0.4.0
 [0.2.0]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/chart-v0.1.0...chart-v0.2.0
