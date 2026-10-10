@@ -1,0 +1,19 @@
+config:
+  servers:
+    - name: vpn-gw-1
+      managementAddress: 127.0.0.1:17600
+      certPath: /etc/openvpn/server/vpn-gw-1.crt
+    - name: vpn-gw-2
+      managementAddress: 127.0.0.1:17601
+      certPath: /etc/openvpn/server/vpn-gw-2.crt
+
+extraVolumes:
+  - name: openvpn-certs
+    hostPath:
+      path: /etc/openvpn/server
+      type: Directory
+
+extraVolumeMounts:
+  - name: openvpn-certs
+    mountPath: /etc/openvpn/server
+    readOnly: true

@@ -158,6 +158,49 @@ tests:
             name: OPENVPN_EXPORTER_TUNNEL_CERT_PATH
             value: /certs/client.crt
 
+  - it: sets single-server env vars
+    template: deployment.yaml
+    set:
+      config.server.name: vpn-gw
+      config.server.managementAddress: 127.0.0.1:7600
+      config.server.configPath: /etc/openvpn/server/vpn-gw.conf
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENVPN_EXPORTER_SERVER_NAME
+            value: vpn-gw
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENVPN_EXPORTER_SERVER_MANAGEMENT_ADDRESS
+            value: 127.0.0.1:7600
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENVPN_EXPORTER_SERVER_CONFIG_PATH
+            value: /etc/openvpn/server/vpn-gw.conf
+
+  - it: does not emit single-server env vars when config.servers is set
+    template: deployment.yaml
+    set:
+      config.server.name: vpn-gw
+      config.server.managementAddress: 127.0.0.1:7600
+      config.servers:
+        - name: vpn-gw-1
+          managementAddress: 127.0.0.1:17600
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENVPN_EXPORTER_SERVER_NAME
+            value: vpn-gw
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENVPN_EXPORTER_SERVER_MANAGEMENT_ADDRESS
+            value: 127.0.0.1:7600
+
   - it: runs as non-root by default
     template: deployment.yaml
     asserts:
@@ -171,16 +214,16 @@ tests:
           path: spec.template.spec.containers[0].securityContext.capabilities.drop[0]
           value: ALL
 
-  - it: sets OPENVPN_EXPORTER_TUNNELS_GLOB from config.tunnelsGlob
+  - it: sets OPENVPN_EXPORTER_TARGETS_GLOB from config.targetsGlob
     template: deployment.yaml
     set:
-      config.tunnelsGlob: /etc/openvpn/client/*.conf
+      config.targetsGlob: /etc/openvpn/{client,server}/*.conf
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: OPENVPN_EXPORTER_TUNNELS_GLOB
-            value: /etc/openvpn/client/*.conf
+            name: OPENVPN_EXPORTER_TARGETS_GLOB
+            value: /etc/openvpn/{client,server}/*.conf
 
   - it: wires --config and the config volume/mount when config.tunnels is set
     template: deployment.yaml
@@ -212,6 +255,25 @@ tests:
         - name: tun1
           managementAddress: 127.0.0.1:17505
     asserts:
+      - exists:
+          path: spec.template.metadata.annotations["checksum/config"]
+
+  - it: wires --config and the config volume/mount when config.servers is set (no tunnels)
+    template: deployment.yaml
+    set:
+      config.servers:
+        - name: srv1
+          managementAddress: 127.0.0.1:17600
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --config=/etc/openvpn-exporter/config.yaml
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: config
+            mountPath: /etc/openvpn-exporter
+            readOnly: true
       - exists:
           path: spec.template.metadata.annotations["checksum/config"]
 

@@ -22,11 +22,13 @@ controller:
   # -- How the exporter is deployed: `Deployment` (a single exporter
   # instance talking to one remote management interface) or `DaemonSet`
   # (one exporter per node, typically paired with `hostNetwork: true` when
-  # the OpenVPN client on that node only binds its management interface to
-  # 127.0.0.1 — see the DaemonSet/k3s example below). A single release
-  # covers as many tunnels as you like via `config.tunnels`/`config.tunnelsGlob`
-  # (or `config.tunnel` for just one); installing multiple releases is only
-  # needed if you also want separate Deployments/DaemonSets.
+  # the OpenVPN client/server on that node only binds its management
+  # interface to 127.0.0.1 — see the DaemonSet/k3s example below). A single
+  # release covers as many tunnels/servers as you like via
+  # `config.tunnels`/`config.servers`/`config.targetsGlob` (or
+  # `config.tunnel`/`config.server` for just one of each); installing
+  # multiple releases is only needed if you also want separate
+  # Deployments/DaemonSets.
   kind: Deployment
   # -- Replica count. Ignored when `controller.kind` is `DaemonSet`.
   replicas: 1
@@ -134,16 +136,39 @@ config:
   # templating (see `extraArgs`).
   tunnels: []
 
-  # -- Value for `OPENVPN_EXPORTER_TUNNELS_GLOB`: a glob of OpenVPN client
-  # config files (e.g. `/etc/openvpn/client/*.conf`) to auto-discover
-  # tunnels from — each match becomes a tunnel named after its filename,
-  # with its certificate and management address parsed straight out of the
-  # file. See the project README for the full behaviour (including the
-  # per-tunnel management password file fallback). Combines with
-  # `config.tunnel`/`config.tunnels` rather than replacing them; mount the
-  # directory yourself via `extraVolumes`/`extraVolumeMounts`. Supports Helm
-  # templating.
-  tunnelsGlob: ""
+  server:
+    # -- Server name. Must be set together with `managementAddress`.
+    # Supports Helm templating. Ignored when `config.servers` is non-empty.
+    name: ""
+    # -- Management interface address. Supports Helm templating.
+    managementAddress: ""
+    # -- Direct path to the server certificate. See the project README for
+    # the `config_path` vs `cert_path` precedence rule. Supports Helm templating.
+    certPath: ""
+    # -- Path to an OpenVPN server config file to parse for `ca`/`cert`.
+    # Takes precedence over `certPath` when both are set. Supports Helm
+    # templating.
+    configPath: ""
+
+  # -- Multiple servers, as a list of `{name, managementAddress, certPath,
+  # configPath}` (same fields as `config.server`, plural). Same ConfigMap/
+  # `--config` wiring as `config.tunnels` — a release can set `tunnels`,
+  # `servers`, both, or neither; either list being non-empty is enough to
+  # switch the exporter to `--config` mode. Each field supports Helm
+  # templating (see `extraArgs`).
+  servers: []
+
+  # -- Value for `OPENVPN_EXPORTER_TARGETS_GLOB`: a glob of OpenVPN client
+  # *and* server config files (e.g. `/etc/openvpn/{client,server}/*.conf` —
+  # brace expansion is supported) to auto-discover both from — each match
+  # becomes a tunnel or a server (auto-detected from its own content) named
+  # after its filename, with its certificate and management address parsed
+  # straight out of the file. See the project README for the full behaviour
+  # (including the per-target management password file fallback). Combines
+  # with `config.tunnel(s)`/`config.server(s)` rather than replacing them;
+  # mount the directory yourself via `extraVolumes`/`extraVolumeMounts`.
+  # Supports Helm templating.
+  targetsGlob: ""
 
   # -- Name of an existing Secret holding the management interface password.
   # Never store the password directly in values. Left empty for an

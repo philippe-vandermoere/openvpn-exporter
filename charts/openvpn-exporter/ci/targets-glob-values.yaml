@@ -3,15 +3,15 @@ controller:
   hostNetwork: true
 
 config:
-  tunnelsGlob: /etc/openvpn/client/*.conf
+  targetsGlob: /etc/openvpn/{client,server}/*.conf
 
 extraVolumes:
-  - name: openvpn-client
+  - name: openvpn
     hostPath:
-      path: /etc/openvpn/client
+      path: /etc/openvpn
       type: Directory
 
 extraVolumeMounts:
-  - name: openvpn-client
-    mountPath: /etc/openvpn/client
+  - name: openvpn
+    mountPath: /etc/openvpn
     readOnly: true
