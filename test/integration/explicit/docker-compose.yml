@@ -11,7 +11,7 @@ services:
 
   openvpn-server:
     build:
-      context: .
+      context: ..
       dockerfile: openvpn.Dockerfile
     image: openvpn-exporter-test-openvpn-26:local
     depends_on:
@@ -30,7 +30,7 @@ services:
   # openvpn 2.5
   openvpn_25:
     build:
-      context: .
+      context: ..
       dockerfile: openvpn.Dockerfile
       args:
         ALPINE_VERSION: "3.16"
@@ -49,7 +49,7 @@ services:
       - pki-openvpn_25-data:/pki:ro
 
   exporter_25:
-    build: ../..
+    build: ../../..
     depends_on:
       - openvpn_25
     environment:
@@ -66,7 +66,7 @@ services:
   # openvpn 2.6
   openvpn_26:
     build:
-      context: .
+      context: ..
       dockerfile: openvpn.Dockerfile
     image: openvpn-exporter-test-openvpn-26:local
     depends_on:
@@ -83,7 +83,7 @@ services:
       - pki-openvpn_26-data:/pki:ro
 
   exporter_26:
-    build: ../..
+    build: ../../..
     depends_on:
       - openvpn_26
     environment:
@@ -102,7 +102,7 @@ services:
   # 3.16/3.20 tags above, its package contents can shift over time.
   openvpn_27:
     build:
-      context: .
+      context: ..
       dockerfile: openvpn.Dockerfile
       args:
         ALPINE_VERSION: "edge"
@@ -121,7 +121,7 @@ services:
       - pki-openvpn_27-data:/pki:ro
 
   exporter_27:
-    build: ../..
+    build: ../../..
     depends_on:
       - openvpn_27
     environment:
@@ -138,7 +138,7 @@ services:
   # Monitors openvpn-server itself (not a client): openvpn_server_* metrics,
   # one series per connected client (openvpn_26/openvpn_25/openvpn_27 above).
   exporter_server:
-    build: ../..
+    build: ../../..
     depends_on:
       - openvpn-server
     environment:

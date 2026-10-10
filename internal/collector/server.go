@@ -2,62 +2,12 @@ package collector
 
 import (
 	"context"
-	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/pvandermoere/openvpn-exporter/internal/mgmt"
+	"github.com/pvandermoere/openvpn-exporter/internal/openvpn"
 )
-
-// Server is a single OpenVPN server target to scrape.
-type Server struct {
-	Name              string
-	ManagementAddress string
-	Password          string
-	Timeout           time.Duration
-}
-
-// ServerCollector scrapes every configured OpenVPN server concurrently on
-// each Collect call. Kept separate from Collector: a server's management
-// interface describes a fundamentally different entity (a variable number
-// of connected clients) than a tunnel's (a fixed per-tunnel metric set).
-type ServerCollector struct {
-	servers []Server
-	logger  *slog.Logger
-
-	// versionWarned mirrors Collector's own field (same warn-once-per-name
-	// mechanism for "version" command failures) but isn't shared with it:
-	// the two collector types are otherwise unrelated.
-	versionWarnedMu sync.Mutex
-	versionWarned   map[string]bool
-}
-
-// NewServerCollector builds a ServerCollector for the given servers. logger
-// may be nil, in which case scrape errors are discarded.
-func NewServerCollector(servers []Server, logger *slog.Logger) *ServerCollector {
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
-	return &ServerCollector{servers: servers, logger: logger, versionWarned: make(map[string]bool)}
-}
-
-func (c *ServerCollector) warnVersionOnce(server string, err error) {
-	c.versionWarnedMu.Lock()
-	alreadyWarned := c.versionWarned[server]
-	c.versionWarned[server] = true
-	c.versionWarnedMu.Unlock()
-	if !alreadyWarned {
-		c.logger.Warn("server version unavailable", "server", server, "error", err)
-	}
-}
-
-func (c *ServerCollector) clearVersionWarned(server string) {
-	c.versionWarnedMu.Lock()
-	delete(c.versionWarned, server)
-	c.versionWarnedMu.Unlock()
-}
 
 var (
 	serverUpDesc = prometheus.NewDesc(
@@ -95,10 +45,17 @@ var (
 		"Always 1; carries the OpenVPN version running this server as a label.",
 		[]string{"server", "version"}, nil,
 	)
+	serverCertExpiryDesc = prometheus.NewDesc(
+		"openvpn_server_cert_expiry_timestamp_seconds",
+		"Certificate expiry date as a Unix timestamp.",
+		[]string{"server", "role", "subject"}, nil,
+	)
 )
 
-// Describe implements prometheus.Collector.
-func (c *ServerCollector) Describe(ch chan<- *prometheus.Desc) {
+// describeServer sends every openvpn_server_* descriptor, unconditionally
+// (required by prometheus.Collector regardless of whether any servers are
+// currently configured).
+func describeServer(ch chan<- *prometheus.Desc) {
 	ch <- serverUpDesc
 	ch <- serverScrapeDurationDesc
 	ch <- serverClientsConnectedDesc
@@ -106,31 +63,15 @@ func (c *ServerCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- serverClientBytesDesc
 	ch <- serverClientConnectedSinceDesc
 	ch <- serverInfoDesc
+	ch <- serverCertExpiryDesc
 }
 
-// Collect implements prometheus.Collector. Every server is scraped
-// concurrently so that one slow or unreachable management interface does
-// not delay the others.
-func (c *ServerCollector) Collect(ch chan<- prometheus.Metric) {
-	var wg sync.WaitGroup
-	for _, s := range c.servers {
-		wg.Add(1)
-		go func(s Server) {
-			defer wg.Done()
-			c.collectServer(ch, s)
-		}(s)
-	}
-	wg.Wait()
-}
-
-func (c *ServerCollector) collectServer(ch chan<- prometheus.Metric, s Server) {
-	client := &mgmt.Client{Address: s.ManagementAddress, Password: s.Password}
-
-	ctx, cancel := context.WithTimeout(context.Background(), s.Timeout)
+func (c *Collector) collectServer(ch chan<- prometheus.Metric, s openvpn.Target) {
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 
 	start := time.Now()
-	status, err := client.FetchServerStatus(ctx)
+	status, err := s.FetchServerStatus(ctx)
 	duration := time.Since(start)
 
 	ch <- prometheus.MustNewConstMetric(serverScrapeDurationDesc, prometheus.GaugeValue, duration.Seconds(), s.Name)
@@ -138,28 +79,42 @@ func (c *ServerCollector) collectServer(ch chan<- prometheus.Metric, s Server) {
 	if err != nil {
 		c.logger.Warn("server scrape failed, reporting as down", "server", s.Name, "error", err)
 		ch <- prometheus.MustNewConstMetric(serverUpDesc, prometheus.GaugeValue, 0, s.Name)
+	} else {
+		ch <- prometheus.MustNewConstMetric(serverUpDesc, prometheus.GaugeValue, 1, s.Name)
+		ch <- prometheus.MustNewConstMetric(serverClientsConnectedDesc, prometheus.GaugeValue, float64(len(status.Clients)), s.Name)
+
+		for _, cl := range status.Clients {
+			ch <- prometheus.MustNewConstMetric(
+				serverClientInfoDesc, prometheus.GaugeValue, 1,
+				s.Name, cl.CommonName, cl.RealAddress, cl.VirtualAddress, cl.Username, cl.Cipher,
+			)
+			ch <- prometheus.MustNewConstMetric(serverClientBytesDesc, prometheus.CounterValue, float64(cl.BytesReceived), s.Name, cl.CommonName, "in")
+			ch <- prometheus.MustNewConstMetric(serverClientBytesDesc, prometheus.CounterValue, float64(cl.BytesSent), s.Name, cl.CommonName, "out")
+			ch <- prometheus.MustNewConstMetric(
+				serverClientConnectedSinceDesc, prometheus.GaugeValue, float64(cl.ConnectedSince.Unix()), s.Name, cl.CommonName,
+			)
+		}
+
+		if status.Version != "" {
+			c.clearVersionWarned(s)
+			ch <- prometheus.MustNewConstMetric(serverInfoDesc, prometheus.GaugeValue, 1, s.Name, status.Version)
+		} else if status.VersionErr != nil {
+			c.warnVersionOnce(s, status.VersionErr)
+		}
+	}
+
+	// Certificate reading is independent of the management scrape above: a
+	// server whose process is temporarily unreachable still has a
+	// certificate on disk that may be about to expire.
+	certs, err := s.Certificates()
+	if err != nil {
+		c.logger.Warn("certificate read failed", "server", s.Name, "error", err)
 		return
 	}
-
-	ch <- prometheus.MustNewConstMetric(serverUpDesc, prometheus.GaugeValue, 1, s.Name)
-	ch <- prometheus.MustNewConstMetric(serverClientsConnectedDesc, prometheus.GaugeValue, float64(len(status.Clients)), s.Name)
-
-	for _, cl := range status.Clients {
+	for _, cert := range certs {
 		ch <- prometheus.MustNewConstMetric(
-			serverClientInfoDesc, prometheus.GaugeValue, 1,
-			s.Name, cl.CommonName, cl.RealAddress, cl.VirtualAddress, cl.Username, cl.Cipher,
+			serverCertExpiryDesc, prometheus.GaugeValue, float64(cert.NotAfter.Unix()),
+			s.Name, cert.Role, cert.Subject,
 		)
-		ch <- prometheus.MustNewConstMetric(serverClientBytesDesc, prometheus.CounterValue, float64(cl.BytesReceived), s.Name, cl.CommonName, "in")
-		ch <- prometheus.MustNewConstMetric(serverClientBytesDesc, prometheus.CounterValue, float64(cl.BytesSent), s.Name, cl.CommonName, "out")
-		ch <- prometheus.MustNewConstMetric(
-			serverClientConnectedSinceDesc, prometheus.GaugeValue, float64(cl.ConnectedSince.Unix()), s.Name, cl.CommonName,
-		)
-	}
-
-	if status.Version != "" {
-		c.clearVersionWarned(s.Name)
-		ch <- prometheus.MustNewConstMetric(serverInfoDesc, prometheus.GaugeValue, 1, s.Name, status.Version)
-	} else if status.VersionErr != nil {
-		c.warnVersionOnce(s.Name, status.VersionErr)
 	}
 }

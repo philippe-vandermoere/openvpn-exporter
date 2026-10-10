@@ -1,4 +1,4 @@
-package mgmt
+package openvpn
 
 import (
 	"fmt"
@@ -6,6 +6,66 @@ import (
 	"strings"
 	"time"
 )
+
+// Stats holds the values read from the management interface for a single
+// scrape of a client tunnel.
+type Stats struct {
+	// State is the raw OpenVPN state string (e.g. CONNECTED, RECONNECTING).
+	State string
+
+	// StateSince is when the tunnel entered State, zero if the state
+	// response's timestamp field couldn't be parsed. A zero value does not
+	// fail FetchStats on its own.
+	StateSince time.Time
+	// StateSinceErr is non-nil when StateSince couldn't be parsed.
+	StateSinceErr error
+
+	// Version is the OpenVPN version (e.g. "2.6.12"), empty if the
+	// "version" command failed or its response couldn't be parsed. A
+	// missing/old management API not supporting a clean "version" response
+	// is not the same as the tunnel being down, so this does not fail
+	// FetchStats on its own.
+	Version string
+	// VersionErr is non-nil when Version couldn't be obtained.
+	VersionErr error
+
+	// TunReadBytes/TunWriteBytes are the plaintext tunnel-side counters
+	// ("TUN/TAP read/write bytes").
+	TunReadBytes  uint64
+	TunWriteBytes uint64
+
+	// LinkReadBytes/LinkWriteBytes are the encrypted link-side counters
+	// ("TCP/UDP read/write bytes").
+	LinkReadBytes  uint64
+	LinkWriteBytes uint64
+}
+
+// ClientInfo describes a single client connected to an OpenVPN *server*, as
+// reported by its "status 3" response.
+type ClientInfo struct {
+	CommonName     string
+	RealAddress    string
+	VirtualAddress string
+	BytesReceived  uint64
+	BytesSent      uint64
+	ConnectedSince time.Time
+	Username       string
+	Cipher         string
+}
+
+// ServerStatus holds the values read from an OpenVPN *server's* management
+// interface for a single scrape.
+type ServerStatus struct {
+	// Clients is one entry per currently connected client.
+	Clients []ClientInfo
+
+	// Version is the OpenVPN version (e.g. "2.6.20"), empty if the
+	// "version" command failed or its response couldn't be parsed. Does
+	// not fail FetchServerStatus on its own (same semantics as
+	// Stats.Version/VersionErr).
+	Version    string
+	VersionErr error
+}
 
 // stateResult is the outcome of parsing the response to the "state" command.
 type stateResult struct {
@@ -126,4 +186,49 @@ func parseStatusLines(lines []string) (*Stats, error) {
 	}
 
 	return stats, nil
+}
+
+// parseServerStatusLines extracts one ClientInfo per CLIENT_LIST row from
+// the response to the "status 3" command, ignoring every other line
+// (TITLE/TIME/HEADER/ROUTING_TABLE/GLOBAL_STATS). Example CLIENT_LIST row,
+// tab-separated:
+//
+//	CLIENT_LIST	openvpn_25	172.18.0.3:49964	10.8.0.6		5859	5948	2026-10-09 16:22:43	1791562963	UNDEF	0	0	AES-256-GCM
+//	            ^CommonName  ^RealAddress      ^VirtualAddress (IPv6 empty) ^BytesRecv ^BytesSent ^ConnectedSince          ^(time_t)   ^Username ^ClientID ^PeerID ^Cipher
+func parseServerStatusLines(lines []string) ([]ClientInfo, error) {
+	var clients []ClientInfo
+	for _, line := range lines {
+		fields := strings.Split(line, "\t")
+		if fields[0] != "CLIENT_LIST" {
+			continue
+		}
+		if len(fields) < 13 {
+			return nil, fmt.Errorf("malformed CLIENT_LIST line: %q", line)
+		}
+
+		bytesRecv, err := strconv.ParseUint(fields[5], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("parsing bytes received for client %q: %w", fields[1], err)
+		}
+		bytesSent, err := strconv.ParseUint(fields[6], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("parsing bytes sent for client %q: %w", fields[1], err)
+		}
+		sec, err := strconv.ParseInt(fields[8], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("parsing connected-since for client %q: %w", fields[1], err)
+		}
+
+		clients = append(clients, ClientInfo{
+			CommonName:     fields[1],
+			RealAddress:    fields[2],
+			VirtualAddress: fields[3],
+			BytesReceived:  bytesRecv,
+			BytesSent:      bytesSent,
+			ConnectedSince: time.Unix(sec, 0),
+			Username:       fields[9],
+			Cipher:         fields[12],
+		})
+	}
+	return clients, nil
 }

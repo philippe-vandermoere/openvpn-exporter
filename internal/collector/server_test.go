@@ -4,8 +4,12 @@ import (
 	"bufio"
 	"log/slog"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/pvandermoere/openvpn-exporter/internal/openvpn"
 )
 
 // startHealthyServerManagementServer runs a minimal, unprotected fake
@@ -57,11 +61,11 @@ func startHealthyServerManagementServer(t *testing.T) string {
 func TestServerCollector_HealthyServer(t *testing.T) {
 	addr := startHealthyServerManagementServer(t)
 
-	c := NewServerCollector([]Server{{
+	c := NewCollector([]openvpn.Target{{
 		Name:              "vpn-gw",
+		Mode:              openvpn.ModeServer,
 		ManagementAddress: addr,
-		Timeout:           2 * time.Second,
-	}}, nil)
+	}}, 2*time.Second, nil)
 
 	metrics, err := gather(c)
 	if err != nil {
@@ -116,11 +120,11 @@ func TestServerCollector_NoClientsConnected(t *testing.T) {
 		))
 	}()
 
-	c := NewServerCollector([]Server{{
+	c := NewCollector([]openvpn.Target{{
 		Name:              "vpn-gw",
+		Mode:              openvpn.ModeServer,
 		ManagementAddress: ln.Addr().String(),
-		Timeout:           2 * time.Second,
-	}}, nil)
+	}}, 2*time.Second, nil)
 
 	metrics, err := gather(c)
 	if err != nil {
@@ -143,11 +147,11 @@ func TestServerCollector_DownServer(t *testing.T) {
 	addr := ln.Addr().String()
 	_ = ln.Close()
 
-	c := NewServerCollector([]Server{{
+	c := NewCollector([]openvpn.Target{{
 		Name:              "vpn-gw",
+		Mode:              openvpn.ModeServer,
 		ManagementAddress: addr,
-		Timeout:           500 * time.Millisecond,
-	}}, nil)
+	}}, 500*time.Millisecond, nil)
 
 	metrics, err := gather(c)
 	if err != nil {
@@ -162,6 +166,47 @@ func TestServerCollector_DownServer(t *testing.T) {
 	assertNotContains(t, metrics, "openvpn_server_client_info{")
 	assertNotContains(t, metrics, "openvpn_server_client_bytes_total{")
 	assertNotContains(t, metrics, "openvpn_server_info{")
+}
+
+// startServerManagementServerWithBadVersion behaves like
+// startHealthyServerManagementServer except the "version" command always
+// fails, simulating a persistently old/non-conforming management API.
+func startServerManagementServerWithBadVersion(t *testing.T) string {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = conn.Close() }()
+				_, _ = conn.Write([]byte(">INFO:OpenVPN Management Interface Version 1 -- type 'help' for more info\r\n"))
+				r := bufio.NewReader(conn)
+				if _, err := r.ReadString('\n'); err != nil { // "status 3"
+					return
+				}
+				_, _ = conn.Write([]byte(
+					"TITLE\tOpenVPN 2.6.20\r\n" +
+						"HEADER\tCLIENT_LIST\tCommon Name\tReal Address\tVirtual Address\tVirtual IPv6 Address\tBytes Received\tBytes Sent\tConnected Since\tConnected Since (time_t)\tUsername\tClient ID\tPeer ID\tData Channel Cipher\r\n" +
+						"END\r\n",
+				))
+				if _, err := r.ReadString('\n'); err != nil { // "version"
+					return
+				}
+				_, _ = conn.Write([]byte("ERROR: unknown command\r\n"))
+			}()
+		}
+	}()
+
+	return ln.Addr().String()
 }
 
 func TestServerCollector_VersionFailureWarnsOnlyOnce(t *testing.T) {
@@ -198,11 +243,11 @@ func TestServerCollector_VersionFailureWarnsOnlyOnce(t *testing.T) {
 	}()
 
 	handler := &countingHandler{}
-	c := NewServerCollector([]Server{{
+	c := NewCollector([]openvpn.Target{{
 		Name:              "vpn-gw",
+		Mode:              openvpn.ModeServer,
 		ManagementAddress: ln.Addr().String(),
-		Timeout:           2 * time.Second,
-	}}, slog.New(handler))
+	}}, 2*time.Second, slog.New(handler))
 
 	if _, err := gather(c); err != nil {
 		t.Fatalf("gathering metrics (1st scrape): %v", err)
@@ -214,4 +259,85 @@ func TestServerCollector_VersionFailureWarnsOnlyOnce(t *testing.T) {
 	if got := handler.Count(); got != 1 {
 		t.Errorf("logger received %d warnings across 2 scrapes, want exactly 1", got)
 	}
+}
+
+func writeServerConfig(t *testing.T, dir string) string {
+	t.Helper()
+	writeTempCert(t, dir, "ca.crt", "Test CA", time.Now().Add(365*24*time.Hour))
+	writeTempCert(t, dir, "server.crt", "Test Server", time.Now().Add(30*24*time.Hour))
+	configPath := filepath.Join(dir, "server.conf")
+	content := "server 10.8.0.0 255.255.255.0\nca ca.crt\ncert server.crt\nkey server.key\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+	return configPath
+}
+
+func TestServerCollector_CertExpiryViaConfigPath(t *testing.T) {
+	dir := t.TempDir()
+	configPath := writeServerConfig(t, dir)
+	addr := startHealthyServerManagementServer(t)
+
+	c := NewCollector([]openvpn.Target{{
+		Name:              "vpn-gw",
+		Mode:              openvpn.ModeServer,
+		ManagementAddress: addr,
+		ConfigPath:        configPath,
+	}}, 2*time.Second, nil)
+
+	metrics, err := gather(c)
+	if err != nil {
+		t.Fatalf("gathering metrics: %v", err)
+	}
+
+	assertContains(t, metrics, `openvpn_server_cert_expiry_timestamp_seconds{role="ca",server="vpn-gw",subject="Test CA"}`)
+	assertContains(t, metrics, `openvpn_server_cert_expiry_timestamp_seconds{role="client",server="vpn-gw",subject="Test Server"}`)
+}
+
+func TestServerCollector_CertExpiryEmittedEvenWhenServerDown(t *testing.T) {
+	dir := t.TempDir()
+	configPath := writeServerConfig(t, dir)
+
+	// Nothing listens here: the management interface is unreachable.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	c := NewCollector([]openvpn.Target{{
+		Name:              "vpn-gw",
+		Mode:              openvpn.ModeServer,
+		ManagementAddress: addr,
+		ConfigPath:        configPath,
+	}}, 500*time.Millisecond, nil)
+
+	metrics, err := gather(c)
+	if err != nil {
+		t.Fatalf("gathering metrics: %v", err)
+	}
+
+	assertContains(t, metrics, `openvpn_server_up{server="vpn-gw"} 0`)
+	// Certificate metrics are independent of the management interface.
+	assertContains(t, metrics, `openvpn_server_cert_expiry_timestamp_seconds{role="ca",server="vpn-gw",subject="Test CA"}`)
+	assertContains(t, metrics, `openvpn_server_cert_expiry_timestamp_seconds{role="client",server="vpn-gw",subject="Test Server"}`)
+}
+
+func TestServerCollector_NoCertSourceConfigured(t *testing.T) {
+	addr := startHealthyServerManagementServer(t)
+
+	c := NewCollector([]openvpn.Target{{
+		Name:              "vpn-gw",
+		Mode:              openvpn.ModeServer,
+		ManagementAddress: addr,
+	}}, 2*time.Second, nil)
+
+	metrics, err := gather(c)
+	if err != nil {
+		t.Fatalf("gathering metrics: %v", err)
+	}
+
+	assertContains(t, metrics, `openvpn_server_up{server="vpn-gw"} 1`)
+	assertNotContains(t, metrics, "openvpn_server_cert_expiry_timestamp_seconds{")
 }

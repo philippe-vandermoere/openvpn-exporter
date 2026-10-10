@@ -1,10 +1,4 @@
-// Package mgmt implements a minimal client for the OpenVPN management
-// interface, enough to read the current tunnel state and traffic counters.
-//
-// The management interface accepts only one client connection at a time, so
-// callers are expected to open a short-lived connection per scrape and close
-// it immediately afterwards.
-package mgmt
+package openvpn
 
 import (
 	"bufio"
@@ -13,57 +7,53 @@ import (
 	"fmt"
 	"net"
 	"strings"
-	"time"
 )
 
-// Stats holds the values read from the management interface for a single
-// scrape.
-type Stats struct {
-	// State is the raw OpenVPN state string (e.g. CONNECTED, RECONNECTING).
-	State string
-
-	// StateSince is when the tunnel entered State, zero if the state
-	// response's timestamp field couldn't be parsed. A zero value does not
-	// fail FetchStats on its own.
-	StateSince time.Time
-	// StateSinceErr is non-nil when StateSince couldn't be parsed.
-	StateSinceErr error
-
-	// Version is the OpenVPN version (e.g. "2.6.12"), empty if the
-	// "version" command failed or its response couldn't be parsed. A
-	// missing/old management API not supporting a clean "version" response
-	// is not the same as the tunnel being down, so this does not fail
-	// FetchStats on its own.
-	Version string
-	// VersionErr is non-nil when Version couldn't be obtained.
-	VersionErr error
-
-	// TunReadBytes/TunWriteBytes are the plaintext tunnel-side counters
-	// ("TUN/TAP read/write bytes").
-	TunReadBytes  uint64
-	TunWriteBytes uint64
-
-	// LinkReadBytes/LinkWriteBytes are the encrypted link-side counters
-	// ("TCP/UDP read/write bytes").
-	LinkReadBytes  uint64
-	LinkWriteBytes uint64
+// Target is a single OpenVPN client tunnel or server process to monitor:
+// its identity (Name/Mode), where to reach its management interface
+// (ManagementAddress/Password), and where to read its certificates from
+// (ConfigPath/CertPath, see Certificates).
+//
+// Mode is excluded from YAML (yaml:"-") deliberately: it's derived from
+// which list (tunnels:/servers:) or discovery path a Target came from,
+// never set by the user directly — a contradictory "mode: client" under
+// servers: would otherwise be possible.
+type Target struct {
+	Name              string `yaml:"name"`
+	Mode              Mode   `yaml:"-"`
+	ManagementAddress string `yaml:"management_address"`
+	ConfigPath        string `yaml:"config_path"`
+	CertPath          string `yaml:"cert_path"`
+	Password          string `yaml:"password"`
 }
 
-// Client talks to a single OpenVPN management interface endpoint.
-type Client struct {
-	// Address is the management interface address, e.g. "127.0.0.1:7505".
-	Address string
-
-	// Password is sent if the management interface prompts for one. Left
-	// empty for unprotected management interfaces.
-	Password string
+// Certificates returns this target's CA/certificate(s): parsed from
+// ConfigPath if set, read directly from CertPath otherwise, or (nil, nil)
+// if neither is set.
+func (t *Target) Certificates() ([]Certificate, error) {
+	switch {
+	case t.ConfigPath != "":
+		parsed, err := ParseConfig(t.ConfigPath)
+		if err != nil {
+			return nil, err
+		}
+		return parsed.Certificates, nil
+	case t.CertPath != "":
+		return LoadCertOnly(t.CertPath)
+	default:
+		return nil, nil
+	}
 }
 
 // FetchStats opens a new connection to the management interface, reads the
 // current state and traffic counters, and closes the connection. It honors
 // ctx's deadline for the whole exchange.
-func (c *Client) FetchStats(ctx context.Context) (*Stats, error) {
-	r, conn, err := c.dialAndAuthenticate(ctx)
+func (t *Target) FetchStats(ctx context.Context) (*Stats, error) {
+	if t.Mode == ModeServer {
+		return nil, fmt.Errorf("%s: FetchStats called on a server-mode target, use FetchServerStatus instead", t.Name)
+	}
+
+	r, conn, err := t.dialAndAuthenticate(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -106,14 +96,51 @@ func (c *Client) FetchStats(ctx context.Context) (*Stats, error) {
 	return stats, nil
 }
 
+// FetchServerStatus opens a new connection to an OpenVPN server's management
+// interface, reads the list of connected clients and the server's version,
+// and closes the connection. It honors ctx's deadline for the whole
+// exchange.
+func (t *Target) FetchServerStatus(ctx context.Context) (*ServerStatus, error) {
+	if t.Mode == ModeClient {
+		return nil, fmt.Errorf("%s: FetchServerStatus called on a client-mode target, use FetchStats instead", t.Name)
+	}
+
+	r, conn, err := t.dialAndAuthenticate(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = conn.Close() }()
+
+	statusLines, err := runCommand(r, conn, "status 3")
+	if err != nil {
+		return nil, fmt.Errorf("status command: %w", err)
+	}
+	clients, err := parseServerStatusLines(statusLines)
+	if err != nil {
+		return nil, fmt.Errorf("status command: %w", err)
+	}
+	status := &ServerStatus{Clients: clients}
+
+	versionLines, err := runCommand(r, conn, "version")
+	if err != nil {
+		status.VersionErr = fmt.Errorf("version command: %w", err)
+	} else if v, verr := parseVersionLines(versionLines); verr != nil {
+		status.VersionErr = fmt.Errorf("version command: %w", verr)
+	} else {
+		status.Version = v
+	}
+
+	return status, nil
+}
+
 // dialAndAuthenticate opens a new connection to the management interface,
 // applies ctx's deadline to it, and authenticates (if the interface requires
 // a password). The caller owns the returned connection and must close it.
-func (c *Client) dialAndAuthenticate(ctx context.Context) (*bufio.Reader, net.Conn, error) {
+func (t *Target) dialAndAuthenticate(ctx context.Context) (*bufio.Reader, net.Conn, error) {
 	var dialer net.Dialer
-	conn, err := dialer.DialContext(ctx, "tcp", c.Address)
+	conn, err := dialer.DialContext(ctx, "tcp", t.ManagementAddress)
 	if err != nil {
-		return nil, nil, fmt.Errorf("dial %s: %w", c.Address, err)
+		return nil, nil, fmt.Errorf("dial %s: %w", t.ManagementAddress, err)
 	}
 
 	if deadline, ok := ctx.Deadline(); ok {
@@ -125,7 +152,7 @@ func (c *Client) dialAndAuthenticate(ctx context.Context) (*bufio.Reader, net.Co
 
 	r := bufio.NewReader(conn)
 
-	if err := c.authenticate(r, conn); err != nil {
+	if err := t.authenticate(r, conn); err != nil {
 		_ = conn.Close()
 		return nil, nil, err
 	}
@@ -141,7 +168,7 @@ func (c *Client) dialAndAuthenticate(ctx context.Context) (*bufio.Reader, net.Co
 // other line the management interface sends, so the greeting is read one
 // byte at a time until either a newline (plain banner, no auth needed) or
 // the prompt suffix is seen.
-func (c *Client) authenticate(r *bufio.Reader, w net.Conn) error {
+func (t *Target) authenticate(r *bufio.Reader, w net.Conn) error {
 	needsPassword, err := readGreeting(r)
 	if err != nil {
 		return fmt.Errorf("reading management interface greeting: %w", err)
@@ -149,11 +176,11 @@ func (c *Client) authenticate(r *bufio.Reader, w net.Conn) error {
 	if !needsPassword {
 		return nil
 	}
-	if c.Password == "" {
+	if t.Password == "" {
 		return errors.New("management interface requires a password but none is configured")
 	}
 
-	if _, err := w.Write([]byte(c.Password + "\n")); err != nil {
+	if _, err := w.Write([]byte(t.Password + "\n")); err != nil {
 		return fmt.Errorf("sending password: %w", err)
 	}
 

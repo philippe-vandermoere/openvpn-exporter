@@ -1,11 +1,6 @@
-// Command openvpn-exporter exposes Prometheus metrics for one or more
-// OpenVPN client tunnels (connection state, traffic counters, and
-// certificate expiry) and/or OpenVPN servers (connected clients and their
-// traffic/connection info), both read from the management interface.
 package main
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -39,36 +34,11 @@ func main() {
 		logger.Warn(w)
 	}
 
-	tunnels := make([]collector.Tunnel, 0, len(cfg.Tunnels))
-	for _, t := range cfg.Tunnels {
-		tunnels = append(tunnels, collector.Tunnel{
-			Name:              t.Name,
-			ManagementAddress: t.ManagementAddress,
-			ConfigPath:        t.ConfigPath,
-			CertPath:          t.CertPath,
-			Password:          cmp.Or(t.Password, cfg.Password),
-			Timeout:           cfg.ScrapeTimeoutDuration(),
-		})
-	}
-
-	servers := make([]collector.Server, 0, len(cfg.Servers))
-	for _, s := range cfg.Servers {
-		servers = append(servers, collector.Server{
-			Name:              s.Name,
-			ManagementAddress: s.ManagementAddress,
-			Password:          cmp.Or(s.Password, cfg.Password),
-			Timeout:           cfg.ScrapeTimeoutDuration(),
-		})
-	}
-
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
-		collector.New(tunnels, logger),
+		collector.NewCollector(cfg.GetTargets(), cfg.ScrapeTimeoutDuration(), logger),
 	)
-	if len(servers) > 0 {
-		registry.MustRegister(collector.NewServerCollector(servers, logger))
-	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
@@ -96,7 +66,7 @@ func main() {
 		}
 	}()
 
-	logger.Info("listening", "address", cfg.ListenAddress, "tunnels", len(tunnels), "servers", len(servers))
+	logger.Info("listening", "address", cfg.ListenAddress, "tunnels", len(cfg.Tunnels), "servers", len(cfg.Servers))
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("server error", "error", err)
 		os.Exit(1)

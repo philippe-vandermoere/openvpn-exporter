@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/pvandermoere/openvpn-exporter/internal/openvpn"
 )
 
 // clearEnv resets every environment variable the config package reads, and
@@ -14,8 +16,8 @@ func clearEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{
 		envConfigPath, envListenAddress, envScrapeTimeout, envPassword, envPasswordFile,
-		envTunnelName, envTunnelMgmtAddress, envTunnelConfigPath, envTunnelCertPath, envTunnelsGlob,
-		envServerName, envServerMgmtAddress,
+		envTunnelName, envTunnelMgmtAddress, envTunnelConfigPath, envTunnelCertPath, envTargetsGlob,
+		envServerName, envServerMgmtAddress, envServerConfigPath, envServerCertPath,
 	} {
 		t.Setenv(key, "")
 	}
@@ -62,6 +64,9 @@ tunnels:
 	}
 	if len(cfg.Tunnels) != 1 || cfg.Tunnels[0].Name != "office" {
 		t.Fatalf("unexpected tunnels: %+v", cfg.Tunnels)
+	}
+	if cfg.Tunnels[0].Mode != openvpn.ModeClient {
+		t.Errorf("Tunnels[0].Mode = %q, want %q", cfg.Tunnels[0].Mode, openvpn.ModeClient)
 	}
 }
 
@@ -236,7 +241,7 @@ func TestLoad_EnvVarSingleTunnel(t *testing.T) {
 		t.Fatalf("got %d tunnels, want 1", len(cfg.Tunnels))
 	}
 	tunnel := cfg.Tunnels[0]
-	if tunnel.Name != "office" || tunnel.ManagementAddress != "127.0.0.1:7505" || tunnel.ConfigPath != tunnelConfig {
+	if tunnel.Name != "office" || tunnel.ManagementAddress != "127.0.0.1:7505" || tunnel.ConfigPath != tunnelConfig || tunnel.Mode != openvpn.ModeClient {
 		t.Errorf("unexpected tunnel: %+v", tunnel)
 	}
 }
@@ -364,14 +369,14 @@ tunnels:
 	}
 }
 
-func TestLoad_TunnelsGlob(t *testing.T) {
+func TestLoad_TargetsGlob(t *testing.T) {
 	clearEnv(t)
 
 	dir := t.TempDir()
 	writeFileAt(t, filepath.Join(dir, "tun1.conf"), "client\nmanagement 127.0.0.1 7505\n")
 	writeFileAt(t, filepath.Join(dir, "tun2.conf"), "client\nmanagement 127.0.0.1 7506\n")
 
-	yamlContent := "tunnels_glob: " + filepath.Join(dir, "*.conf") + "\n"
+	yamlContent := "targets_glob: " + filepath.Join(dir, "*.conf") + "\n"
 	yamlPath := writeTempFile(t, "config.yaml", yamlContent)
 
 	cfg, err := Load(yamlPath)
@@ -382,7 +387,7 @@ func TestLoad_TunnelsGlob(t *testing.T) {
 		t.Fatalf("got %d tunnels, want 2: %+v", len(cfg.Tunnels), cfg.Tunnels)
 	}
 
-	byName := map[string]Tunnel{}
+	byName := map[string]openvpn.Target{}
 	for _, tun := range cfg.Tunnels {
 		byName[tun.Name] = tun
 	}
@@ -390,13 +395,64 @@ func TestLoad_TunnelsGlob(t *testing.T) {
 	if !ok || tun1.ManagementAddress != "127.0.0.1:7505" || tun1.ConfigPath != filepath.Join(dir, "tun1.conf") {
 		t.Errorf("tun1: %+v", tun1)
 	}
+	if tun1.Mode != openvpn.ModeClient {
+		t.Errorf("tun1.Mode = %q, want %q", tun1.Mode, openvpn.ModeClient)
+	}
 	tun2, ok := byName["tun2"]
 	if !ok || tun2.ManagementAddress != "127.0.0.1:7506" {
 		t.Errorf("tun2: %+v", tun2)
 	}
 }
 
-func TestLoad_TunnelsGlobMergesWithExplicitTunnels(t *testing.T) {
+func TestLoad_TargetsGlob_RoutesServerModeToServers(t *testing.T) {
+	clearEnv(t)
+
+	dir := t.TempDir()
+	writeFileAt(t, filepath.Join(dir, "tun1.conf"), "client\nmanagement 127.0.0.1 7505\n")
+	writeFileAt(t, filepath.Join(dir, "srv1.conf"), "port 1194\nserver 10.8.0.0 255.255.255.0\nmanagement 127.0.0.1 7605\n")
+
+	yamlContent := "targets_glob: " + filepath.Join(dir, "*.conf") + "\n"
+	yamlPath := writeTempFile(t, "config.yaml", yamlContent)
+
+	cfg, err := Load(yamlPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Tunnels) != 1 || cfg.Tunnels[0].Name != "tun1" || cfg.Tunnels[0].Mode != openvpn.ModeClient {
+		t.Fatalf("unexpected tunnels: %+v", cfg.Tunnels)
+	}
+	if len(cfg.Servers) != 1 || cfg.Servers[0].Name != "srv1" || cfg.Servers[0].ManagementAddress != "127.0.0.1:7605" || cfg.Servers[0].Mode != openvpn.ModeServer {
+		t.Fatalf("unexpected servers: %+v", cfg.Servers)
+	}
+}
+
+func TestLoad_TargetsGlob_SupportsBraceExpansion(t *testing.T) {
+	clearEnv(t)
+
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "client"), 0o700); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "server"), 0o700); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+	writeFileAt(t, filepath.Join(dir, "client", "tun1.conf"), "client\nmanagement 127.0.0.1 7505\n")
+	writeFileAt(t, filepath.Join(dir, "server", "srv1.conf"), "server 10.8.0.0 255.255.255.0\nmanagement 127.0.0.1 7605\n")
+
+	yamlContent := "targets_glob: " + filepath.Join(dir, "{client,server}", "*.conf") + "\n"
+	yamlPath := writeTempFile(t, "config.yaml", yamlContent)
+
+	cfg, err := Load(yamlPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Tunnels) != 1 || len(cfg.Servers) != 1 {
+		t.Fatalf("got %d tunnels / %d servers, want 1/1 (brace expansion not matching both): tunnels=%+v servers=%+v",
+			len(cfg.Tunnels), len(cfg.Servers), cfg.Tunnels, cfg.Servers)
+	}
+}
+
+func TestLoad_TargetsGlobMergesWithExplicitTunnels(t *testing.T) {
 	clearEnv(t)
 
 	dir := t.TempDir()
@@ -404,7 +460,7 @@ func TestLoad_TunnelsGlobMergesWithExplicitTunnels(t *testing.T) {
 
 	officeConfig := writeTempFile(t, "office.conf", "client\n")
 	yamlContent := `
-tunnels_glob: ` + filepath.Join(dir, "*.conf") + `
+targets_glob: ` + filepath.Join(dir, "*.conf") + `
 tunnels:
   - name: office
     management_address: 127.0.0.1:9999
@@ -421,7 +477,7 @@ tunnels:
 	}
 }
 
-func TestLoad_TunnelsGlobDuplicateNameWithExplicitTunnelIsAnError(t *testing.T) {
+func TestLoad_TargetsGlobDuplicateNameWithExplicitTunnelIsAnError(t *testing.T) {
 	clearEnv(t)
 
 	dir := t.TempDir()
@@ -429,7 +485,7 @@ func TestLoad_TunnelsGlobDuplicateNameWithExplicitTunnelIsAnError(t *testing.T) 
 
 	otherConfig := writeTempFile(t, "other.conf", "client\n")
 	yamlContent := `
-tunnels_glob: ` + filepath.Join(dir, "*.conf") + `
+targets_glob: ` + filepath.Join(dir, "*.conf") + `
 tunnels:
   - name: office
     management_address: 127.0.0.1:9999
@@ -442,12 +498,12 @@ tunnels:
 	}
 }
 
-func TestLoad_TunnelsGlobNoMatchesIsNotAnErrorByItself(t *testing.T) {
+func TestLoad_TargetsGlobNoMatchesIsNotAnErrorByItself(t *testing.T) {
 	clearEnv(t)
 
 	officeConfig := writeTempFile(t, "office.conf", "client\n")
 	yamlContent := `
-tunnels_glob: /does/not/exist/*.conf
+targets_glob: /does/not/exist/*.conf
 tunnels:
   - name: office
     management_address: 127.0.0.1:7505
@@ -464,13 +520,13 @@ tunnels:
 	}
 }
 
-func TestLoad_TunnelsGlobRejectsUnconnectableManagement(t *testing.T) {
+func TestLoad_TargetsGlobRejectsUnconnectableManagement(t *testing.T) {
 	clearEnv(t)
 
 	dir := t.TempDir()
 	writeFileAt(t, filepath.Join(dir, "tun1.conf"), "management 0.0.0.0 7505\n")
 
-	yamlContent := "tunnels_glob: " + filepath.Join(dir, "*.conf") + "\n"
+	yamlContent := "targets_glob: " + filepath.Join(dir, "*.conf") + "\n"
 	yamlPath := writeTempFile(t, "config.yaml", yamlContent)
 
 	if _, err := Load(yamlPath); err == nil {
@@ -478,14 +534,28 @@ func TestLoad_TunnelsGlobRejectsUnconnectableManagement(t *testing.T) {
 	}
 }
 
-func TestLoad_TunnelsGlobPasswordFile_Readable(t *testing.T) {
+func TestLoad_TargetsGlobRequiresManagementDirective(t *testing.T) {
+	clearEnv(t)
+
+	dir := t.TempDir()
+	writeFileAt(t, filepath.Join(dir, "tun1.conf"), "client\nca ca.crt\n")
+
+	yamlContent := "targets_glob: " + filepath.Join(dir, "*.conf") + "\n"
+	yamlPath := writeTempFile(t, "config.yaml", yamlContent)
+
+	if _, err := Load(yamlPath); err == nil {
+		t.Fatal("expected an error: discovery requires a management directive, got nil")
+	}
+}
+
+func TestLoad_TargetsGlobPasswordFile_Readable(t *testing.T) {
 	clearEnv(t)
 
 	dir := t.TempDir()
 	passFile := writeFileAt(t, filepath.Join(dir, "tun1.pass"), "tunnel-password\n")
 	writeFileAt(t, filepath.Join(dir, "tun1.conf"), "management 127.0.0.1 7505 "+passFile+"\n")
 
-	yamlContent := "tunnels_glob: " + filepath.Join(dir, "tun1.conf") + "\n"
+	yamlContent := "targets_glob: " + filepath.Join(dir, "tun1.conf") + "\n"
 	yamlPath := writeTempFile(t, "config.yaml", yamlContent)
 
 	cfg, err := Load(yamlPath)
@@ -500,13 +570,13 @@ func TestLoad_TunnelsGlobPasswordFile_Readable(t *testing.T) {
 	}
 }
 
-func TestLoad_TunnelsGlobPasswordFile_UnreadableFallsBackToGlobalPassword(t *testing.T) {
+func TestLoad_TargetsGlobPasswordFile_UnreadableFallsBackToGlobalPassword(t *testing.T) {
 	clearEnv(t)
 
 	dir := t.TempDir()
 	writeFileAt(t, filepath.Join(dir, "tun1.conf"), "management 127.0.0.1 7505 /does/not/exist.pass\n")
 
-	yamlContent := "tunnels_glob: " + filepath.Join(dir, "*.conf") + "\n"
+	yamlContent := "targets_glob: " + filepath.Join(dir, "*.conf") + "\n"
 	yamlPath := writeTempFile(t, "config.yaml", yamlContent)
 	t.Setenv(envPassword, "global-password")
 
@@ -522,13 +592,13 @@ func TestLoad_TunnelsGlobPasswordFile_UnreadableFallsBackToGlobalPassword(t *tes
 	}
 }
 
-func TestLoad_TunnelsGlobPasswordFile_UnreadableAndNoGlobalPasswordIsAnError(t *testing.T) {
+func TestLoad_TargetsGlobPasswordFile_UnreadableAndNoGlobalPasswordIsAnError(t *testing.T) {
 	clearEnv(t)
 
 	dir := t.TempDir()
 	writeFileAt(t, filepath.Join(dir, "tun1.conf"), "management 127.0.0.1 7505 /does/not/exist.pass\n")
 
-	yamlContent := "tunnels_glob: " + filepath.Join(dir, "*.conf") + "\n"
+	yamlContent := "targets_glob: " + filepath.Join(dir, "*.conf") + "\n"
 	yamlPath := writeTempFile(t, "config.yaml", yamlContent)
 
 	if _, err := Load(yamlPath); err == nil {
@@ -652,7 +722,7 @@ func TestLoad_EnvVarSingleServer(t *testing.T) {
 		t.Fatalf("got %d servers, want 1", len(cfg.Servers))
 	}
 	server := cfg.Servers[0]
-	if server.Name != "vpn-gw" || server.ManagementAddress != "127.0.0.1:7600" {
+	if server.Name != "vpn-gw" || server.ManagementAddress != "127.0.0.1:7600" || server.Mode != openvpn.ModeServer {
 		t.Errorf("unexpected server: %+v", server)
 	}
 }
@@ -665,5 +735,112 @@ func TestLoad_EnvVarPartialServerIsAnError(t *testing.T) {
 
 	if _, err := Load(""); err == nil {
 		t.Fatal("expected an error for a partially specified env server, got nil")
+	}
+}
+
+func TestLoad_ServerConfigPathYAML(t *testing.T) {
+	clearEnv(t)
+
+	serverConfig := writeTempFile(t, "server.conf", "server 10.8.0.0 255.255.255.0\n")
+	yamlContent := `
+servers:
+  - name: vpn-gw-1
+    management_address: 127.0.0.1:7600
+    config_path: ` + serverConfig + `
+`
+	yamlPath := writeTempFile(t, "config.yaml", yamlContent)
+
+	cfg, err := Load(yamlPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Servers[0].ConfigPath != serverConfig {
+		t.Errorf("ConfigPath = %q, want %q", cfg.Servers[0].ConfigPath, serverConfig)
+	}
+}
+
+func TestLoad_ServerMissingConfigPathIsAnError(t *testing.T) {
+	clearEnv(t)
+
+	yamlContent := `
+servers:
+  - name: vpn-gw-1
+    management_address: 127.0.0.1:7600
+    config_path: /does/not/exist.conf
+`
+	yamlPath := writeTempFile(t, "config.yaml", yamlContent)
+
+	if _, err := Load(yamlPath); err == nil {
+		t.Fatal("expected an error for a non-existent server config_path, got nil")
+	}
+}
+
+func TestLoad_EnvVarSingleServerWithConfigPath(t *testing.T) {
+	clearEnv(t)
+
+	serverConfig := writeTempFile(t, "server.conf", "server 10.8.0.0 255.255.255.0\n")
+	t.Setenv(envServerName, "vpn-gw")
+	t.Setenv(envServerMgmtAddress, "127.0.0.1:7600")
+	t.Setenv(envServerConfigPath, serverConfig)
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Servers) != 1 || cfg.Servers[0].ConfigPath != serverConfig {
+		t.Fatalf("unexpected servers: %+v", cfg.Servers)
+	}
+}
+
+func TestLoad_EnvVarSingleServerWithCertPath(t *testing.T) {
+	clearEnv(t)
+
+	certPath := writeTempFile(t, "server.crt", "not-a-real-cert-but-just-needs-to-exist\n")
+	t.Setenv(envServerName, "vpn-gw")
+	t.Setenv(envServerMgmtAddress, "127.0.0.1:7600")
+	t.Setenv(envServerCertPath, certPath)
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Servers) != 1 || cfg.Servers[0].CertPath != certPath {
+		t.Fatalf("unexpected servers: %+v", cfg.Servers)
+	}
+}
+
+func TestConfig_GetTargets(t *testing.T) {
+	cfg := &Config{
+		Password: "global-password",
+		Tunnels: []openvpn.Target{
+			{Name: "tun1", Mode: openvpn.ModeClient, ManagementAddress: "127.0.0.1:7505"},
+			{Name: "tun2", Mode: openvpn.ModeClient, ManagementAddress: "127.0.0.1:7506", Password: "tun2-own-password"},
+		},
+		Servers: []openvpn.Target{
+			{Name: "srv1", Mode: openvpn.ModeServer, ManagementAddress: "127.0.0.1:7600"},
+		},
+	}
+
+	targets := cfg.GetTargets()
+	if len(targets) != 3 {
+		t.Fatalf("got %d targets, want 3: %+v", len(targets), targets)
+	}
+
+	byName := map[string]openvpn.Target{}
+	for _, target := range targets {
+		byName[target.Name] = target
+	}
+
+	if got := byName["tun1"].Password; got != "global-password" {
+		t.Errorf("tun1 Password = %q, want the global fallback %q", got, "global-password")
+	}
+	if got := byName["tun2"].Password; got != "tun2-own-password" {
+		t.Errorf("tun2 Password = %q, want its own %q (not overridden by the global one)", got, "tun2-own-password")
+	}
+	if got := byName["srv1"].Password; got != "global-password" {
+		t.Errorf("srv1 Password = %q, want the global fallback %q", got, "global-password")
+	}
+	if byName["srv1"].Mode != openvpn.ModeServer {
+		t.Errorf("srv1 Mode = %q, want %q", byName["srv1"].Mode, openvpn.ModeServer)
 	}
 }

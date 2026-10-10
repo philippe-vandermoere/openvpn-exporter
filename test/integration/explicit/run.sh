@@ -1,14 +1,5 @@
 #!/usr/bin/env bash
-# Integration test: a real OpenVPN server and three real clients running
-# different real OpenVPN releases (openvpn_26 -> 2.6.x, openvpn_25 -> 2.5.x,
-# openvpn_27 -> 2.7.x, see openvpn.Dockerfile), each with its own distinct
-# management password and a strictly isolated PKI volume. One exporter per
-# client reads ca+cert via config_path, mounting that client's full PKI
-# directory (its private key is 600/root-owned and genuinely unreadable by
-# the exporter's non-root UID — proving the "key never opened" guarantee
-# against a real file, not just a unit test). A separate exporter monitors
-# openvpn-server itself (openvpn_server_* metrics, one series per connected
-# client above). Requires Docker with NET_ADMIN/tun support.
+
 set -euo pipefail
 
 cd "$(dirname "$0")"

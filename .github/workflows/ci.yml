@@ -40,6 +40,9 @@ jobs:
 
   integration-tests:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        stack: [explicit, autodiscovery]
     steps:
       - uses: actions/checkout@v7
-      - run: ./test/integration/run.sh
+      - run: ./test/integration/${{ matrix.stack }}/run.sh

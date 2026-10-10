@@ -1,0 +1,97 @@
+services:
+  pki-init:
+    image: alpine:3.20
+    entrypoint: ["sh", "/pki-init.sh"]
+    volumes:
+      - shared-config-data:/shared
+      - ./pki-init.sh:/pki-init.sh:ro
+
+  # server-a owns the network namespace that client-a/client-b/exporter all
+  # join below (network_mode: "service:server-a"): all four then see the
+  # same 127.0.0.1, exactly like several real OpenVPN processes on one host
+  # -- no multi-process container, no custom process supervisor, each still
+  # runs exactly one "openvpn --config ..." via the shared entrypoint.sh.
+  server-a:
+    build:
+      context: ..
+      dockerfile: openvpn.Dockerfile
+    image: openvpn-exporter-test-openvpn-autodiscovery:local
+    depends_on:
+      pki-init:
+        condition: service_completed_successfully
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    environment:
+      OPENVPN_ROLE: server
+      OPENVPN_CONFIG_FILE: /shared/server/server-a.conf
+      OPENVPN_PKI_DIR: /shared/server/server-a
+      OPENVPN_MANAGEMENT_HOST: 127.0.0.1
+      OPENVPN_MANAGEMENT_PORT: "7504"
+      OPENVPN_MANAGEMENT_PASSWORD: ${GLOBAL_MGMT_PASSWORD}
+    volumes:
+      - shared-config-data:/shared
+
+  client-a:
+    build:
+      context: ..
+      dockerfile: openvpn.Dockerfile
+    image: openvpn-exporter-test-openvpn-autodiscovery:local
+    network_mode: "service:server-a"
+    depends_on:
+      - server-a
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    environment:
+      OPENVPN_ROLE: client
+      OPENVPN_REMOTE: 127.0.0.1
+      OPENVPN_CONFIG_FILE: /shared/client/client-a.conf
+      OPENVPN_PKI_DIR: /shared/client/client-a
+      OPENVPN_MANAGEMENT_HOST: 127.0.0.1
+      OPENVPN_MANAGEMENT_PORT: "7505"
+      OPENVPN_MANAGEMENT_PASSWORD: ${GLOBAL_MGMT_PASSWORD}
+    volumes:
+      - shared-config-data:/shared
+
+  client-b:
+    build:
+      context: ..
+      dockerfile: openvpn.Dockerfile
+    image: openvpn-exporter-test-openvpn-autodiscovery:local
+    network_mode: "service:server-a"
+    depends_on:
+      - server-a
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    environment:
+      OPENVPN_ROLE: client
+      OPENVPN_REMOTE: 127.0.0.1
+      OPENVPN_CONFIG_FILE: /shared/client/client-b.conf
+      OPENVPN_PKI_DIR: /shared/client/client-b
+      OPENVPN_MANAGEMENT_HOST: 127.0.0.1
+      OPENVPN_MANAGEMENT_PORT: "7506"
+      OPENVPN_MANAGEMENT_PASSWORD: ${GLOBAL_MGMT_PASSWORD}
+    volumes:
+      - shared-config-data:/shared
+
+  exporter:
+    build: ../../..
+    network_mode: "service:server-a"
+    depends_on:
+      - server-a
+      - client-a
+      - client-b
+    environment:
+      OPENVPN_EXPORTER_TARGETS_GLOB: /shared/{client,server}/*.conf
+      OPENVPN_EXPORTER_PASSWORD: ${GLOBAL_MGMT_PASSWORD}
+      OPENVPN_EXPORTER_SCRAPE_TIMEOUT: 3s
+    volumes:
+      - shared-config-data:/shared:ro
+
+volumes:
+  shared-config-data:
