@@ -67,11 +67,12 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
-Container args: --config when config.tunnels is non-empty (the chart's own
-ConfigMap, see openvpn-exporter.volumes below), plus extraArgs.
+Container args: --config when config.tunnels/config.servers is non-empty
+(the chart's own ConfigMap, see openvpn-exporter.volumes below), plus
+extraArgs.
 */}}
 {{- define "openvpn-exporter.args" -}}
-{{- if .Values.config.tunnels }}
+{{- if or .Values.config.tunnels .Values.config.servers }}
 - --config=/etc/openvpn-exporter/config.yaml
 {{- end }}
 {{- with .Values.extraArgs }}
@@ -109,9 +110,27 @@ Container env vars.
   value: {{ include "openvpn-exporter.render" (dict "value" .Values.config.tunnel.configPath "context" $) | quote }}
 {{- end }}
 {{- end }}
-{{- if .Values.config.tunnelsGlob }}
-- name: OPENVPN_EXPORTER_TUNNELS_GLOB
-  value: {{ include "openvpn-exporter.render" (dict "value" .Values.config.tunnelsGlob "context" $) | quote }}
+{{- if not .Values.config.servers }}
+{{- if .Values.config.server.name }}
+- name: OPENVPN_EXPORTER_SERVER_NAME
+  value: {{ include "openvpn-exporter.render" (dict "value" .Values.config.server.name "context" $) | quote }}
+{{- end }}
+{{- if .Values.config.server.managementAddress }}
+- name: OPENVPN_EXPORTER_SERVER_MANAGEMENT_ADDRESS
+  value: {{ include "openvpn-exporter.render" (dict "value" .Values.config.server.managementAddress "context" $) | quote }}
+{{- end }}
+{{- if .Values.config.server.certPath }}
+- name: OPENVPN_EXPORTER_SERVER_CERT_PATH
+  value: {{ include "openvpn-exporter.render" (dict "value" .Values.config.server.certPath "context" $) | quote }}
+{{- end }}
+{{- if .Values.config.server.configPath }}
+- name: OPENVPN_EXPORTER_SERVER_CONFIG_PATH
+  value: {{ include "openvpn-exporter.render" (dict "value" .Values.config.server.configPath "context" $) | quote }}
+{{- end }}
+{{- end }}
+{{- if .Values.config.targetsGlob }}
+- name: OPENVPN_EXPORTER_TARGETS_GLOB
+  value: {{ include "openvpn-exporter.render" (dict "value" .Values.config.targetsGlob "context" $) | quote }}
 {{- end }}
 {{- if .Values.config.passwordSecretName }}
 - name: OPENVPN_EXPORTER_PASSWORD
@@ -126,11 +145,11 @@ Container env vars.
 {{- end }}
 
 {{/*
-Volumes: the chart's own ConfigMap (see configmap.yaml) when config.tunnels
-is non-empty, plus extraVolumes.
+Volumes: the chart's own ConfigMap (see configmap.yaml) when
+config.tunnels/config.servers is non-empty, plus extraVolumes.
 */}}
 {{- define "openvpn-exporter.volumes" -}}
-{{- if .Values.config.tunnels }}
+{{- if or .Values.config.tunnels .Values.config.servers }}
 - name: config
   configMap:
     name: {{ include "openvpn-exporter.fullname" . }}
@@ -145,7 +164,7 @@ Volume mounts: pairs with openvpn-exporter.volumes above, plus
 extraVolumeMounts.
 */}}
 {{- define "openvpn-exporter.volumeMounts" -}}
-{{- if .Values.config.tunnels }}
+{{- if or .Values.config.tunnels .Values.config.servers }}
 - name: config
   mountPath: /etc/openvpn-exporter
   readOnly: true
@@ -167,9 +186,9 @@ metadata:
     {{- with .Values.controller.podLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
-  {{- if or .Values.config.tunnels .Values.controller.podAnnotations }}
+  {{- if or .Values.config.tunnels .Values.config.servers .Values.controller.podAnnotations }}
   annotations:
-    {{- if .Values.config.tunnels }}
+    {{- if or .Values.config.tunnels .Values.config.servers }}
     checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
     {{- end }}
     {{- with .Values.controller.podAnnotations }}

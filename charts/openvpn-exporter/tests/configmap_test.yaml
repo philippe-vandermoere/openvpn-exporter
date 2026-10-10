@@ -46,3 +46,57 @@ tests:
       - matchRegex:
           path: data["config.yaml"]
           pattern: 'name: "myrelease-tun1"'
+
+  - it: renders a ConfigMap with the servers list when config.servers is set
+    set:
+      config.servers:
+        - name: srv1
+          managementAddress: 127.0.0.1:17600
+          certPath: /etc/openvpn/server/srv1.crt
+        - name: srv2
+          managementAddress: 127.0.0.1:17601
+          configPath: /etc/openvpn/server/srv2.conf
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'name: "srv1"'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'management_address: "127.0.0.1:17600"'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'cert_path: "/etc/openvpn/server/srv1.crt"'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'name: "srv2"'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'config_path: "/etc/openvpn/server/srv2.conf"'
+
+  - it: renders both tunnels and servers in the same ConfigMap
+    set:
+      config.tunnels:
+        - name: tun1
+          managementAddress: 127.0.0.1:17505
+      config.servers:
+        - name: srv1
+          managementAddress: 127.0.0.1:17600
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "tunnels:"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "servers:"
+
+  - it: renders only a servers block when config.tunnels is empty
+    set:
+      config.servers:
+        - name: srv1
+          managementAddress: 127.0.0.1:17600
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "tunnels:"

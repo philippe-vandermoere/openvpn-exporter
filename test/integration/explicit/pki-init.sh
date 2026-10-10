@@ -46,13 +46,6 @@ cp pki/ca.crt /pki-openvpn_27/ca.crt
 cp pki/issued/openvpn_27.crt /pki-openvpn_27/tls.crt
 cp pki/private/openvpn_27.key /pki-openvpn_27/tls.key
 
-# Minimal client config for the EXPORTER's own config_path parsing (not a
-# working OpenVPN config -- the real client config is generated separately
-# by entrypoint.sh inside the openvpn_26/openvpn_25/openvpn_27 containers).
-# Relative paths resolve against this file's own directory, so
-# ca.crt/tls.crt/tls.key are found without an absolute path. Proves the
-# exporter reads ca+cert while tls.key (600, root-owned) sits right next to
-# them, unreadable by the exporter's non-root UID.
 printf 'client\nca ca.crt\ncert tls.crt\nkey tls.key\n' >/pki-openvpn_26/client.conf
 printf 'client\nca ca.crt\ncert tls.crt\nkey tls.key\n' >/pki-openvpn_25/client.conf
 printf 'client\nca ca.crt\ncert tls.crt\nkey tls.key\n' >/pki-openvpn_27/client.conf

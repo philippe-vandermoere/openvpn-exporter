@@ -1,7 +1,7 @@
 # openvpn-exporter
 
 Helm chart for [openvpn-exporter](https://github.com/philippe-vandermoere/openvpn-exporter),
-a Prometheus exporter for OpenVPN client tunnels.
+a Prometheus exporter for OpenVPN client tunnels and servers.
 
 ## Installing
 
@@ -9,26 +9,31 @@ a Prometheus exporter for OpenVPN client tunnels.
 helm install openvpn-exporter oci://ghcr.io/philippe-vandermoere/charts/openvpn-exporter --version <version>
 ```
 
+See [CHANGELOG.md](CHANGELOG.md) for this chart's release history (the
+exporter image itself has its own, [../../CHANGELOG.md](../../CHANGELOG.md)).
+
 ## Deployment shape: `controller.kind`
 
 - `Deployment` (default): a single exporter instance, talking to one remote
   management interface over the network.
 - `DaemonSet`: one exporter per node. Pair with `controller.hostNetwork:
-  true` when the OpenVPN client on that node binds its management
+  true` when the OpenVPN client/server on that node binds its management
   interface to `127.0.0.1` only (the common case) — the exporter then
   reaches it via the node's network namespace. See the worked k3s example
   below.
 
-A single release can monitor one tunnel (`config.tunnel`), a known list of
-several (`config.tunnels`), or dynamically discover them from a glob of
-OpenVPN client config files (`config.tunnelsGlob`) — see the sections below.
-Installing the chart multiple times (one release per tunnel) is only needed
-if you also want separate Deployments/DaemonSets per tunnel.
+A single release can monitor one tunnel (`config.tunnel`), one server
+(`config.server`), a known list of several of either
+(`config.tunnels`/`config.servers`), or dynamically discover both from a
+single glob of OpenVPN config files (`config.targetsGlob`) — see the
+sections below. Installing the chart multiple times (one release per
+tunnel/server) is only needed if you also want separate
+Deployments/DaemonSets.
 
 Naming fields (`nameOverride`, `fullnameOverride`, `serviceAccount.name`),
-the tunnel fields under `config`, and `extraArgs`/`extraEnv`/`extraVolumes`/
-`extraVolumeMounts` are all passed through Helm's `tpl`, so they may contain
-template expressions evaluated against the release — e.g.
+the tunnel/server fields under `config`, and `extraArgs`/`extraEnv`/
+`extraVolumes`/`extraVolumeMounts` are all passed through Helm's `tpl`, so
+they may contain template expressions evaluated against the release — e.g.
 `config.tunnel.name: "{{"{{"}} .Release.Name {{"}}"}}"` to derive the tunnel name from
 the release name automatically.
 
@@ -77,23 +82,63 @@ Deployment/DaemonSet roll its pods whenever the list changes. As with
 `config.tunnel`, certificates themselves are not shipped by this chart —
 mount them via `extraVolumes`/`extraVolumeMounts`.
 
-## Discovering tunnels automatically: `config.tunnelsGlob`
-
-For the common case of a directory already managed outside Kubernetes (e.g.
-systemd `openvpn-client@.service` units writing to `/etc/openvpn/client/`),
-point the exporter at a glob instead of listing tunnels by hand:
+## Configuring a single server: `config.server`
 
 ```yaml
 config:
-  tunnelsGlob: /etc/openvpn/client/*.conf
+  server:
+    name: vpn-gw-1
+    managementAddress: 127.0.0.1:7600
+    configPath: /etc/openvpn/server/vpn-gw-1.conf
 ```
 
-This only sets `OPENVPN_EXPORTER_TUNNELS_GLOB` — no ConfigMap is involved,
-since the exporter reads the `.conf` files directly. Mount the directory
-yourself via `extraVolumes`/`extraVolumeMounts`; see the worked example
-below. Full behaviour (name derivation, management address parsing, the
-per-tunnel password file fallback) is documented in the
-[project README](../../README.md#discovering-tunnels-automatically-tunnels_glob).
+Same fields, same `config_path`/`cert_path` precedence rule, and the same
+"certificates aren't shipped by this chart" note as `config.tunnel` above —
+see the
+[project README](../../README.md#certificate-source-config_path-vs-cert_path).
+The management interface password (`config.passwordSecretName`/
+`config.passwordSecretKey`) is shared with tunnels — one release can
+monitor a tunnel and a server at once, each with its own name but the same
+password Secret.
+
+## Configuring several known servers: `config.servers`
+
+```yaml
+config:
+  servers:
+    - name: vpn-gw-1
+      managementAddress: 127.0.0.1:17601
+      certPath: /etc/openvpn/server/vpn-gw-1.crt
+    - name: vpn-gw-2
+      managementAddress: 127.0.0.1:17602
+      certPath: /etc/openvpn/server/vpn-gw-2.crt
+```
+
+Same ConfigMap/`--config` wiring as `config.tunnels` (see above) — a
+release can set `config.tunnels`, `config.servers`, both, or neither; either
+list being non-empty switches the exporter to `--config` mode and disables
+the corresponding single-tunnel/single-server env vars.
+
+## Discovering tunnels and servers automatically: `config.targetsGlob`
+
+For the common case of a directory tree already managed outside Kubernetes
+(e.g. systemd `openvpn-client@.service`/`openvpn-server@.service` units
+writing to `/etc/openvpn/client/`/`/etc/openvpn/server/`), point the
+exporter at a single glob instead of listing tunnels/servers by hand:
+
+```yaml
+config:
+  targetsGlob: /etc/openvpn/{client,server}/*.conf
+```
+
+Brace expansion (`{client,server}`) is supported. This only sets
+`OPENVPN_EXPORTER_TARGETS_GLOB` — no ConfigMap is involved, since the
+exporter reads the `.conf` files directly and auto-detects each match as a
+tunnel or a server from its own content. Mount the directory yourself via
+`extraVolumes`/`extraVolumeMounts`; see the worked example below. Full
+behaviour (name derivation, mode detection, management address parsing, the
+per-target password file fallback) is documented in the
+[project README](../../README.md#discovering-tunnels-and-servers-automatically-targets_glob).
 
 ## Example: DaemonSet on k3s, OpenVPN client running on each node
 
@@ -165,15 +210,16 @@ pod (unlikely here, since `managementAddress` above is a literal IP), add
 `controller.dnsPolicy: ClusterFirstWithHostNet` — `hostNetwork: true`
 otherwise makes the pod use the node's own DNS resolution.
 
-## Example: several systemd-managed tunnels on one node, discovered dynamically
+## Example: several systemd-managed tunnels/servers on one node, discovered dynamically
 
-Topology this chart's `config.tunnelsGlob` was built for: a node runs
-several OpenVPN clients as systemd `openvpn-client@.service` units, each
-with its own config/cert/key under `/etc/openvpn/client/` (e.g. `tun1.conf`/
-`tun1.crt`/`tun1.key`, `tun2.conf`/`tun2.crt`/`tun2.key`, plus a shared
-`ca.crt`), each `.conf` already containing its own `management 127.0.0.1
-<port>` line. This chart is installed once, as a subchart of a monitoring
-stack, rather than once per tunnel:
+Topology this chart's `config.targetsGlob` was built for: a node runs
+several OpenVPN clients and/or servers as systemd
+`openvpn-client@.service`/`openvpn-server@.service` units, each with its
+own config/cert/key under `/etc/openvpn/client/`/`/etc/openvpn/server/`
+(e.g. `tun1.conf`/`tun1.crt`/`tun1.key`, `tun2.conf`/`tun2.crt`/`tun2.key`,
+plus a shared `ca.crt`), each `.conf` already containing its own
+`management 127.0.0.1 <port>` line. This chart is installed once, as a
+subchart of a monitoring stack, rather than once per tunnel/server:
 
 ```yaml
 controller:
@@ -181,28 +227,28 @@ controller:
   hostNetwork: true
 
 config:
-  tunnelsGlob: /etc/openvpn/client/*.conf
+  targetsGlob: /etc/openvpn/{client,server}/*.conf
 
 extraVolumes:
-  - name: openvpn-client
+  - name: openvpn
     hostPath:
-      path: /etc/openvpn/client
+      path: /etc/openvpn
       type: Directory
 
 extraVolumeMounts:
-  - name: openvpn-client
-    mountPath: /etc/openvpn/client
+  - name: openvpn
+    mountPath: /etc/openvpn
     readOnly: true
 ```
 
-Mounting the whole directory is safe even though the `.key` files are
-typically `0600 root` and unreadable by the pod's non-root UID: the exporter
-never opens key files at all (see the project README), so a `.key` it can't
-read is simply certificate material it was never going to touch anyway. The
-one thing to check on the host side is that `/etc/openvpn/client` itself is
-traversable by an arbitrary UID (`o+x`, the Debian/Ubuntu default for that
-path) — otherwise even the `0644` `.conf`/`.crt` files become unreachable
-through it.
+Mounting the whole tree is safe even though the `.key` files are typically
+`0600 root` and unreadable by the pod's non-root UID: the exporter never
+opens key files at all (see the project README), so a `.key` it can't read
+is simply certificate material it was never going to touch anyway. The one
+thing to check on the host side is that `/etc/openvpn`,
+`/etc/openvpn/client`, and `/etc/openvpn/server` are all traversable by an
+arbitrary UID (`o+x`, the Debian/Ubuntu default for that path) — otherwise
+even the `0644` `.conf`/`.crt` files become unreachable through it.
 
 ## Prometheus Operator integration
 

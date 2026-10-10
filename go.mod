@@ -3,6 +3,7 @@ module github.com/pvandermoere/openvpn-exporter
 go 1.27.1
 
 require (
+	github.com/bmatcuk/doublestar/v4 v4.10.2
 	github.com/prometheus/client_golang v1.24.1
 	gopkg.in/yaml.v3 v3.0.1
 )

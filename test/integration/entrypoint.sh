@@ -1,6 +1,11 @@
 #!/bin/sh
 set -eu
 
+CONFIG_FILE="${OPENVPN_CONFIG_FILE:-/etc/openvpn/openvpn.conf}"
+PKI_DIR="${OPENVPN_PKI_DIR:-/pki}"
+MANAGEMENT_HOST="${OPENVPN_MANAGEMENT_HOST:-0.0.0.0}"
+MANAGEMENT_PORT="${OPENVPN_MANAGEMENT_PORT:-7504}"
+
 OPENVPN_MANAGEMENT_PASSWORD_FILE=/run/secrets/openvpn-management
 mkdir -p "$(dirname "${OPENVPN_MANAGEMENT_PASSWORD_FILE}")"
 if [ -n "${OPENVPN_MANAGEMENT_PASSWORD:-}" ]; then
@@ -10,7 +15,7 @@ else
 fi
 chmod 600 "${OPENVPN_MANAGEMENT_PASSWORD_FILE}"
 
-CONFIG_FILE=/etc/openvpn/openvpn.conf
+mkdir -p "$(dirname "${CONFIG_FILE}")"
 : >"${CONFIG_FILE}"
 
 {
@@ -30,9 +35,9 @@ else
 fi
 
 {
-    echo 'ca /pki/ca.crt'
-    echo 'cert /pki/tls.crt'
-    echo 'key /pki/tls.key'
+    echo "ca ${PKI_DIR}/ca.crt"
+    echo "cert ${PKI_DIR}/tls.crt"
+    echo "key ${PKI_DIR}/tls.key"
 } | tee -a "${CONFIG_FILE}"
 
 if [ "${OPENVPN_ROLE:-client}" = "server" ]; then
@@ -50,7 +55,7 @@ fi
     echo 'persist-key'
     echo 'persist-tun'
     echo 'verb 3'
-    echo "management 0.0.0.0 7504 ${OPENVPN_MANAGEMENT_PASSWORD_FILE}"
+    echo "management ${MANAGEMENT_HOST} ${MANAGEMENT_PORT} ${OPENVPN_MANAGEMENT_PASSWORD_FILE}"
 } | tee -a "${CONFIG_FILE}"
 
 exec openvpn --config "${CONFIG_FILE}"
