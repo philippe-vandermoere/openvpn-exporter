@@ -90,9 +90,13 @@ func (c *Collector) collectServer(ch chan<- prometheus.Metric, s openvpn.Target)
 			)
 			ch <- prometheus.MustNewConstMetric(serverClientBytesDesc, prometheus.CounterValue, float64(cl.BytesReceived), s.Name, cl.CommonName, "in")
 			ch <- prometheus.MustNewConstMetric(serverClientBytesDesc, prometheus.CounterValue, float64(cl.BytesSent), s.Name, cl.CommonName, "out")
-			ch <- prometheus.MustNewConstMetric(
-				serverClientConnectedSinceDesc, prometheus.GaugeValue, float64(cl.ConnectedSince.Unix()), s.Name, cl.CommonName,
-			)
+			// Zero for a point-to-point peer whose "state" timestamp couldn't
+			// be parsed: omitted rather than reported as year 1.
+			if !cl.ConnectedSince.IsZero() {
+				ch <- prometheus.MustNewConstMetric(
+					serverClientConnectedSinceDesc, prometheus.GaugeValue, float64(cl.ConnectedSince.Unix()), s.Name, cl.CommonName,
+				)
+			}
 		}
 
 		if status.Version != "" {

@@ -61,6 +61,19 @@ a different metric family, keyed by `server` and, for the per-client metrics, al
 | `openvpn_server_scrape_duration_seconds` | gauge | `server` | Duration of the last management interface scrape, including failed attempts. |
 | `openvpn_server_cert_expiry_timestamp_seconds` | gauge | `server`, `role` (`ca`\|`client`), `subject` | Same semantics as `openvpn_tunnel_cert_expiry_timestamp_seconds`: certificate expiry as an absolute Unix timestamp, independent of the server's reachability. Emitted only if `config_path` or `cert_path` is set for the server. |
 
+**Point-to-point servers** (e.g. a static key `secret` config listening with
+`proto tcp-server`) have no client list: the exporter detects this from the
+`status` response itself and reports their single peer instead.
+`openvpn_server_clients_connected` is 1 while the management `state` is
+`CONNECTED`, 0 otherwise; the peer's `openvpn_server_client_*` series (only
+while connected) carry `common_name=""` (no certificate), `real_address`
+from `state`, `virtual_address` from the config's `ifconfig` directive (when
+`config_path` is known and the device is `tun` without `topology subnet`),
+empty `username`/`cipher`, the instance's global link counters as
+`bytes_total`, and the time it entered `CONNECTED` as `connected_since`. No
+`openvpn_server_cert_expiry_timestamp_seconds` is emitted, since a static key
+config has no `ca`/`cert`.
+
 `clients_connected`, `client_info`, `client_bytes_total`, and `client_connected_since_timestamp_seconds`
 all come from a single `status 3` command (`server_info`'s `version` is the one additional
 round-trip, same two-command shape as a tunnel scrape) — no partial series if the scrape fails
@@ -131,9 +144,13 @@ silently misparsed. A matched file with no `management` directive at all is
 also a hard error — discovery has no other way to find the address.
 
 Whether a matched file becomes a tunnel or a server is detected from its own
-content: a `server`/`server-bridge`/`mode server` directive makes it a
-server, anything else (including PSK/secret configs, which have no
-server-mode concept) makes it a tunnel.
+content: it's a server if it has a `server`/`server-bridge`/`mode server`
+directive, or if it listens instead of initiating — `proto tcp-server` (or
+`tcp4-server`/`tcp6-server`), or `lport` with neither `remote` nor `client`.
+The latter covers point-to-point static key (`secret`) servers, which can't
+use any server-mode directive. Anything else is a tunnel. A point-to-point
+listener with neither of those (e.g. UDP on the default port, no `remote`)
+is still detected as a tunnel: declare it under `servers:` explicitly.
 
 If the directive's optional third argument (a password file) is present,
 its content is used as that target's password — unless the file isn't
@@ -266,16 +283,17 @@ against an in-process fake management server and don't need Docker:
 go test ./... -race
 ```
 
-Two separate Docker Compose stacks under `test/integration/` exercise the
-exporter against real OpenVPN processes, both via `make compose-test`
-(or individually, see below). Both share `test/integration/openvpn.Dockerfile`
+Three separate Docker Compose stacks under `test/integration/` exercise the
+exporter against real OpenVPN processes, all via `make compose-test`
+(or individually, see below). All share `test/integration/openvpn.Dockerfile`
 (official `alpine` base plus the `openvpn` package, nothing else) and
 `test/integration/entrypoint.sh`, which writes the management password
 (given or randomly generated) and renders the config for its role (and, for
-`autodiscovery/` below, for a custom config/PKI location and management
-port — see the env vars at the top of that script). Only the exporter
-itself is built from this repository's root Dockerfile. Both require
-Docker with `NET_ADMIN` and `/dev/net/tun` support.
+`autodiscovery/` and `p2p/` below, for a custom config/PKI location and
+management port, or a point-to-point static key config via
+`OPENVPN_STATIC_KEY` — see the env vars at the top of that script).
+Only the exporter itself is built from this repository's root Dockerfile.
+All require Docker with `NET_ADMIN` and `/dev/net/tun` support.
 
 ### `test/integration/explicit/` — cases 2/3, explicit `tunnels:`/`servers:`
 
@@ -320,6 +338,25 @@ glob, that the management password file (container-local, never shared
 with the exporter) correctly falls back to the exporter's global password
 with a logged warning, certificate expiry for both tunnels and the server,
 and the server-side aggregated + per-client view of both connected clients.
+
+### `test/integration/p2p/` — a point-to-point static key server and client
+
+`./test/integration/p2p/run.sh` (`make compose-test-p2p`) runs one static key
+(`secret`) server — `proto tcp-server`, `lport`, `ifconfig`, no `server`/
+`mode server` directive — and its static key client (`proto tcp-client`,
+`remote`), both rendered by the shared `entrypoint.sh` from a key generated
+by `p2p-init.sh`, and sharing the exporter's network
+namespace, discovered through `targets_glob` exactly as on a real host. The
+test confirms the startup log reports `tunnels=1 servers=1` (the server is
+not mistaken for a tunnel), and cross-checks the server's single-peer view
+against the server's own management interface: `clients_connected` 1,
+`client_info` with `common_name=""`, `real_address` equal to `state`'s
+remote address (and to the client's established socket), `virtual_address`
+from `ifconfig`, `connected_since` equal to `state`'s timestamp, non-zero
+`bytes_total`, `openvpn_server_info` matching the running OpenVPN version,
+and no certificate expiry metric. Stopping the client must then drop
+`clients_connected` to 0 and its `client_info` series, while the server
+stays up.
 
 ## CI/CD
 

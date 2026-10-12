@@ -98,7 +98,8 @@ func (t *Target) FetchStats(ctx context.Context) (*Stats, error) {
 
 // FetchServerStatus opens a new connection to an OpenVPN server's management
 // interface, reads the list of connected clients and the server's version,
-// and closes the connection. It honors ctx's deadline for the whole
+// and closes the connection. A point-to-point server (no CLIENT_LIST in its
+// "status" response) is detected at runtime and handled by fetchP2PStatus. It honors ctx's deadline for the whole
 // exchange.
 func (t *Target) FetchServerStatus(ctx context.Context) (*ServerStatus, error) {
 	if t.Mode == ModeClient {
@@ -115,11 +116,19 @@ func (t *Target) FetchServerStatus(ctx context.Context) (*ServerStatus, error) {
 	if err != nil {
 		return nil, fmt.Errorf("status command: %w", err)
 	}
-	clients, err := parseServerStatusLines(statusLines)
-	if err != nil {
-		return nil, fmt.Errorf("status command: %w", err)
+	var status *ServerStatus
+	if isMultiClientStatus(statusLines) {
+		clients, err := parseServerStatusLines(statusLines)
+		if err != nil {
+			return nil, fmt.Errorf("status command: %w", err)
+		}
+		status = &ServerStatus{Clients: clients}
+	} else {
+		status, err = t.fetchP2PStatus(r, conn, statusLines)
+		if err != nil {
+			return nil, err
+		}
 	}
-	status := &ServerStatus{Clients: clients}
 
 	versionLines, err := runCommand(r, conn, "version")
 	if err != nil {
@@ -130,6 +139,48 @@ func (t *Target) FetchServerStatus(ctx context.Context) (*ServerStatus, error) {
 		status.Version = v
 	}
 
+	return status, nil
+}
+
+// fetchP2PStatus builds a point-to-point server's status from its
+// client-style "status" response (statusLines) plus a "state" command: at
+// most one peer, present only while CONNECTED, with the instance's global
+// link counters as its bytes. A static key peer has no certificate, so its
+// CommonName is empty; its VirtualAddress comes from the config's
+// "ifconfig" directive when ConfigPath is set (best effort, left empty if
+// the config can't be parsed).
+func (t *Target) fetchP2PStatus(r *bufio.Reader, conn net.Conn, statusLines []string) (*ServerStatus, error) {
+	counters, err := parseStatusLines(statusLines)
+	if err != nil {
+		return nil, fmt.Errorf("status command: %w", err)
+	}
+
+	stateLines, err := runCommand(r, conn, "state")
+	if err != nil {
+		return nil, fmt.Errorf("state command: %w", err)
+	}
+	stateRes, err := parseStateLines(stateLines)
+	if err != nil {
+		return nil, fmt.Errorf("state command: %w", err)
+	}
+
+	status := &ServerStatus{P2P: true}
+	if stateRes.State != "CONNECTED" {
+		return status, nil
+	}
+
+	peer := ClientInfo{
+		RealAddress:    stateRes.RemoteAddress,
+		BytesReceived:  counters.LinkReadBytes,
+		BytesSent:      counters.LinkWriteBytes,
+		ConnectedSince: stateRes.Since,
+	}
+	if t.ConfigPath != "" {
+		if parsed, err := ParseConfig(t.ConfigPath); err == nil {
+			peer.VirtualAddress = parsed.PeerVirtualAddress
+		}
+	}
+	status.Clients = []ClientInfo{peer}
 	return status, nil
 }
 

@@ -1,0 +1,78 @@
+services:
+  p2p-init:
+    image: alpine:3.20
+    entrypoint: ["sh", "/p2p-init.sh"]
+    volumes:
+      - shared-config-data:/shared
+      - ./p2p-init.sh:/p2p-init.sh:ro
+
+  # server owns the network namespace that client/exporter join below
+  # (network_mode: "service:server"): all three see the same 127.0.0.1, like
+  # a static key server and client side by side on one host. OPENVPN_STATIC_KEY
+  # makes the shared entrypoint.sh render a point-to-point static key config
+  # (proto tcp-server + lport / tcp-client + remote, ifconfig, secret) instead
+  # of a TLS one: no "server"/"mode server" directive, as on a real host.
+  server:
+    build:
+      context: ..
+      dockerfile: openvpn.Dockerfile
+    image: openvpn-exporter-test-openvpn-p2p:local
+    depends_on:
+      p2p-init:
+        condition: service_completed_successfully
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    environment:
+      OPENVPN_ROLE: server
+      OPENVPN_STATIC_KEY: /shared/keys/static.key
+      OPENVPN_PORT: "8443"
+      OPENVPN_IFCONFIG: 10.10.0.1 10.10.0.2
+      OPENVPN_CONFIG_FILE: /shared/server/server.conf
+      OPENVPN_MANAGEMENT_HOST: 127.0.0.1
+      OPENVPN_MANAGEMENT_PORT: "7505"
+      OPENVPN_MANAGEMENT_PASSWORD: ${GLOBAL_MGMT_PASSWORD}
+    volumes:
+      - shared-config-data:/shared
+
+  client:
+    build:
+      context: ..
+      dockerfile: openvpn.Dockerfile
+    image: openvpn-exporter-test-openvpn-p2p:local
+    network_mode: "service:server"
+    depends_on:
+      - server
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    environment:
+      OPENVPN_ROLE: client
+      OPENVPN_STATIC_KEY: /shared/keys/static.key
+      OPENVPN_REMOTE: 127.0.0.1
+      OPENVPN_PORT: "8443"
+      OPENVPN_IFCONFIG: 10.10.0.2 10.10.0.1
+      OPENVPN_CONFIG_FILE: /shared/client/client.conf
+      OPENVPN_MANAGEMENT_HOST: 127.0.0.1
+      OPENVPN_MANAGEMENT_PORT: "7504"
+      OPENVPN_MANAGEMENT_PASSWORD: ${GLOBAL_MGMT_PASSWORD}
+    volumes:
+      - shared-config-data:/shared
+
+  exporter:
+    build: ../../..
+    network_mode: "service:server"
+    depends_on:
+      - server
+      - client
+    environment:
+      OPENVPN_EXPORTER_TARGETS_GLOB: /shared/{client,server}/*.conf
+      OPENVPN_EXPORTER_PASSWORD: ${GLOBAL_MGMT_PASSWORD}
+      OPENVPN_EXPORTER_SCRAPE_TIMEOUT: 3s
+    volumes:
+      - shared-config-data:/shared:ro
+
+volumes:
+  shared-config-data:

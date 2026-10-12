@@ -437,6 +437,72 @@ func TestParseConfig_ManagementWithoutCerts(t *testing.T) {
 	}
 }
 
+// clogReauConfig is a real point-to-point static key server config: no
+// "server"/"mode server" directive is allowed with "secret".
+const clogReauConfig = `dev tun
+proto tcp-server
+local 198.51.100.10
+lport 8443
+ifconfig 10.10.0.1 10.10.0.2
+secret clog-reau.key
+persist-tun
+persist-key
+keepalive 10 60
+management 127.0.0.1 7505
+`
+
+func TestParseConfig_ListeningConfigsAreServers(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    Mode
+	}{
+		{"static key p2p server", clogReauConfig, ModeServer},
+		{"proto tcp-server alone", "proto tcp-server\nsecret static.key\n", ModeServer},
+		{"proto tcp6-server", "proto tcp6-server\n", ModeServer},
+		{"lport without remote", "proto udp\nlport 1195\nsecret static.key\n", ModeServer},
+		{"lport with remote", "lport 1195\nremote peer.example.com 1195\n", ModeClient},
+		{"lport with client", "client\nlport 1195\n", ModeClient},
+		{"proto tcp-client", "proto tcp-client\nremote peer.example.com 1194\n", ModeClient},
+		{"remote-cert-tls is not remote", "lport 1195\nremote-cert-tls server\n", ModeServer},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseConfig(writeConfig(t, tt.content))
+			if err != nil {
+				t.Fatalf("ParseConfig: %v", err)
+			}
+			if got.Mode != tt.want {
+				t.Errorf("Mode = %q, want %q", got.Mode, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseConfig_PeerVirtualAddress(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{"tun p2p", clogReauConfig, "10.10.0.2"},
+		{"tap: second argument is a netmask", "dev tap0\nifconfig 10.10.0.1 255.255.255.0\n", ""},
+		{"tun with topology subnet", "dev tun\ntopology subnet\nifconfig 10.10.0.1 255.255.255.0\n", ""},
+		{"no ifconfig", "dev tun\n", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseConfig(writeConfig(t, tt.content))
+			if err != nil {
+				t.Fatalf("ParseConfig: %v", err)
+			}
+			if got.PeerVirtualAddress != tt.want {
+				t.Errorf("PeerVirtualAddress = %q, want %q", got.PeerVirtualAddress, tt.want)
+			}
+		})
+	}
+}
+
 // --- Direct unit tests on the private helper functions ---
 
 func TestIsServerModeDirective(t *testing.T) {

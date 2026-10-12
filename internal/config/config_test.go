@@ -426,6 +426,31 @@ func TestLoad_TargetsGlob_RoutesServerModeToServers(t *testing.T) {
 	}
 }
 
+func TestLoad_TargetsGlob_RoutesP2PStaticKeyServersToServers(t *testing.T) {
+	clearEnv(t)
+
+	// Static key servers can't use "server"/"mode server": they're detected
+	// as listening ("proto tcp-server", "lport" without "remote") instead.
+	dir := t.TempDir()
+	writeFileAt(t, filepath.Join(dir, "fieldbox.conf"), "client\ndev tun\nproto tcp\nremote 203.0.113.1 8443\nmanagement 127.0.0.1 7504\n")
+	writeFileAt(t, filepath.Join(dir, "clog-reau.conf"), "dev tun\nproto tcp-server\nlport 8443\nifconfig 10.10.0.1 10.10.0.2\nsecret clog-reau.key\nmanagement 127.0.0.1 7505\n")
+	writeFileAt(t, filepath.Join(dir, "clog-cestas.conf"), "dev tun\nproto tcp-server\nlport 8444\nifconfig 10.10.1.1 10.10.1.2\nsecret clog-cestas.key\nmanagement 127.0.0.1 7506\n")
+
+	yamlContent := "targets_glob: " + filepath.Join(dir, "*.conf") + "\n"
+	yamlPath := writeTempFile(t, "config.yaml", yamlContent)
+
+	cfg, err := Load(yamlPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Tunnels) != 1 || cfg.Tunnels[0].Name != "fieldbox" {
+		t.Fatalf("unexpected tunnels: %+v", cfg.Tunnels)
+	}
+	if len(cfg.Servers) != 2 {
+		t.Fatalf("got %d servers, want 2: %+v", len(cfg.Servers), cfg.Servers)
+	}
+}
+
 func TestLoad_TargetsGlob_SupportsBraceExpansion(t *testing.T) {
 	clearEnv(t)
 
