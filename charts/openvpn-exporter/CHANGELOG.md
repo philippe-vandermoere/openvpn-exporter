@@ -11,6 +11,15 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-12
+
+### Changed
+
+- Bumped `appVersion` to 0.5.0 — see the exporter changelog. With
+  `config.targetsGlob`, point-to-point static key servers (e.g.
+  `proto tcp-server` + `secret`) are now discovered as servers rather than
+  tunnels.
+
 ## [0.6.0] - 2026-10-10
 
 ### Added
@@ -68,7 +77,8 @@ and this project uses [Semantic Versioning](https://semver.org/).
   configuration (`config.tunnel`), password Secret reference, Service,
   optional Prometheus Operator `ServiceMonitor`, liveness/readiness probes.
 
-[Unreleased]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/chart-v0.6.0...HEAD
+[Unreleased]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/chart-v0.7.0...HEAD
+[0.7.0]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/chart-v0.6.0...chart-v0.7.0
 [0.6.0]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/chart-v0.5.0...chart-v0.6.0
 [0.5.0]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/chart-v0.4.0...chart-v0.5.0
 [0.4.0]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/chart-v0.2.0...chart-v0.4.0
