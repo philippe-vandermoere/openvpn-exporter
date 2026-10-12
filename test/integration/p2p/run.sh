@@ -84,10 +84,13 @@ echo "server state: ${state_line}"
 metrics | grep -qx "openvpn_server_client_info{cipher=\"\",common_name=\"\",real_address=\"${peer_address}\",server=\"server\",username=\"\",virtual_address=\"10.10.0.2\"} 1" \
     || fail "server: client_info doesn't match state (expected real_address=${peer_address}, virtual_address=10.10.0.2 from ifconfig)"
 # The peer address is the client's real socket, not just whatever state says.
-# (captured first: grep -q exiting early would SIGPIPE netstat under pipefail)
-sockets="$($COMPOSE exec -T server netstat -tn 2>/dev/null)"
-echo "$sockets" | grep -q "${peer_address}[[:space:]]*127.0.0.1:8443[[:space:]]*ESTABLISHED" \
-    || fail "server: real_address ${peer_address} isn't the client's established socket"
+# Every "compose exec" output below is captured whole before being filtered:
+# piping it into something that exits early (grep -q, head) can break its
+# pipe, making compose exit 255 and silently abort the script under
+# set -e/pipefail.
+sockets="$($COMPOSE exec -T server netstat -tn 2>/dev/null)" || fail "server: netstat failed"
+grep -q "${peer_address}[[:space:]]*127.0.0.1:8443[[:space:]]*ESTABLISHED" \
+    <<<"$sockets" || fail "server: real_address ${peer_address} isn't the client's established socket"
 metrics_since="$(metrics | grep '^openvpn_server_client_connected_since_timestamp_seconds{common_name="",server="server"}' | awk '{printf "%d", $2}')"
 [ "$metrics_since" = "$state_since" ] \
     || fail "server: connected_since ${metrics_since} != state timestamp ${state_since}"
@@ -95,7 +98,8 @@ for direction in in out; do
     metrics | grep -Eq "^openvpn_server_client_bytes_total\{common_name=\"\",direction=\"${direction}\",server=\"server\"\} [1-9]" \
         || fail "server: missing or zero ${direction} bytes"
 done
-openvpn_version="$($COMPOSE exec -T server openvpn --version | head -1 | awk '{print $2}')"
+version_output="$($COMPOSE exec -T server openvpn --version)" || fail "server: openvpn --version failed"
+openvpn_version="$(awk 'NR == 1 {print $2}' <<<"$version_output")"
 metrics | grep -qx "openvpn_server_info{server=\"server\",version=\"${openvpn_version}\"} 1" \
     || fail "server: openvpn_server_info doesn't report version ${openvpn_version}"
 metrics | grep -q 'cert_expiry_timestamp_seconds{' \
