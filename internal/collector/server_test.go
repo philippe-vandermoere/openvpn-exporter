@@ -341,3 +341,68 @@ func TestServerCollector_NoCertSourceConfigured(t *testing.T) {
 	assertContains(t, metrics, `openvpn_server_up{server="vpn-gw"} 1`)
 	assertNotContains(t, metrics, "openvpn_server_cert_expiry_timestamp_seconds{")
 }
+
+func TestServerCollector_P2PStaticKeyServer(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_, _ = conn.Write([]byte(">INFO:OpenVPN Management Interface Version 1 -- type 'help' for more info\r\n"))
+		r := bufio.NewReader(conn)
+		if _, err := r.ReadString('\n'); err != nil { // "status 3"
+			return
+		}
+		_, _ = conn.Write([]byte(
+			"OpenVPN STATISTICS\r\n" +
+				"Updated,Mon Oct 12 10:00:00 2026\r\n" +
+				"TUN/TAP read bytes,100\r\n" +
+				"TUN/TAP write bytes,200\r\n" +
+				"TCP/UDP read bytes,300\r\n" +
+				"TCP/UDP write bytes,400\r\n" +
+				"END\r\n",
+		))
+		if _, err := r.ReadString('\n'); err != nil { // "state"
+			return
+		}
+		_, _ = conn.Write([]byte("1700000000,CONNECTED,SUCCESS,10.10.0.1,203.0.113.7,51234,,\r\nEND\r\n"))
+		if _, err := r.ReadString('\n'); err != nil { // "version"
+			return
+		}
+		_, _ = conn.Write([]byte("OpenVPN Version: OpenVPN 2.4.4 x86_64-pc-linux-gnu [SSL (OpenSSL)]\r\nManagement Version: 1\r\nEND\r\n"))
+	}()
+
+	configPath := filepath.Join(t.TempDir(), "clog-reau.conf")
+	if err := os.WriteFile(configPath, []byte("dev tun\nproto tcp-server\nlport 8443\nifconfig 10.10.0.1 10.10.0.2\nsecret clog-reau.key\n"), 0o600); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+
+	c := NewCollector([]openvpn.Target{{
+		Name:              "clog-reau",
+		Mode:              openvpn.ModeServer,
+		ManagementAddress: ln.Addr().String(),
+		ConfigPath:        configPath,
+	}}, 2*time.Second, nil)
+
+	metrics, err := gather(c)
+	if err != nil {
+		t.Fatalf("gathering metrics: %v", err)
+	}
+
+	assertContains(t, metrics, `openvpn_server_up{server="clog-reau"} 1`)
+	assertContains(t, metrics, `openvpn_server_clients_connected{server="clog-reau"} 1`)
+	assertContains(t, metrics, `openvpn_server_info{server="clog-reau",version="2.4.4"} 1`)
+	assertContains(t, metrics, `openvpn_server_client_info{cipher="",common_name="",real_address="203.0.113.7:51234",server="clog-reau",username="",virtual_address="10.10.0.2"} 1`)
+	assertContains(t, metrics, `openvpn_server_client_bytes_total{common_name="",direction="in",server="clog-reau"} 300`)
+	assertContains(t, metrics, `openvpn_server_client_bytes_total{common_name="",direction="out",server="clog-reau"} 400`)
+	assertContains(t, metrics, `openvpn_server_client_connected_since_timestamp_seconds{common_name="",server="clog-reau"} 1.7e+09`)
+	assertNotContains(t, metrics, "openvpn_server_cert_expiry_timestamp_seconds{")
+	assertNotContains(t, metrics, "openvpn_tunnel_up{")
+}

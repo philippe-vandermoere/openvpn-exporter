@@ -2,6 +2,7 @@ package openvpn
 
 import (
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -59,6 +60,12 @@ type ServerStatus struct {
 	// Clients is one entry per currently connected client.
 	Clients []ClientInfo
 
+	// P2P is true for a point-to-point server (e.g. static key, "proto
+	// tcp-server"): its "status" response has no CLIENT_LIST, so Clients
+	// holds at most its single peer, built from "state" and the instance's
+	// global link counters (see FetchServerStatus).
+	P2P bool
+
 	// Version is the OpenVPN version (e.g. "2.6.20"), empty if the
 	// "version" command failed or its response couldn't be parsed. Does
 	// not fail FetchServerStatus on its own (same semantics as
@@ -78,6 +85,10 @@ type stateResult struct {
 	// (the only thing that affects openvpn_tunnel_up/openvpn_tunnel_state)
 	// was still read successfully.
 	SinceErr error
+
+	// RemoteAddress is the remote end's "ip:port" (or just "ip" if no port
+	// was reported), empty if the state line doesn't carry one.
+	RemoteAddress string
 }
 
 // parseStateLines extracts the state and its timestamp from the response to
@@ -94,6 +105,12 @@ func parseStateLines(lines []string) (stateResult, error) {
 	}
 
 	result := stateResult{State: fields[1]}
+	if len(fields) >= 5 && fields[4] != "" {
+		result.RemoteAddress = fields[4]
+		if len(fields) >= 6 && fields[5] != "" {
+			result.RemoteAddress = net.JoinHostPort(fields[4], fields[5])
+		}
+	}
 	sec, err := strconv.ParseInt(fields[0], 10, 64)
 	if err != nil {
 		result.SinceErr = fmt.Errorf("parsing state timestamp %q: %w", fields[0], err)
@@ -186,6 +203,20 @@ func parseStatusLines(lines []string) (*Stats, error) {
 	}
 
 	return stats, nil
+}
+
+// isMultiClientStatus reports whether a "status 3" response comes from a
+// multi-client server (TITLE/HEADER/CLIENT_LIST rows). A point-to-point
+// instance ignores the status version and replies with the same
+// "OpenVPN STATISTICS" CSV block as a client tunnel instead.
+func isMultiClientStatus(lines []string) bool {
+	for _, line := range lines {
+		tag, _, _ := strings.Cut(line, "\t")
+		if tag == "TITLE" || tag == "HEADER" || tag == "CLIENT_LIST" {
+			return true
+		}
+	}
+	return false
 }
 
 // parseServerStatusLines extracts one ClientInfo per CLIENT_LIST row from

@@ -54,11 +54,20 @@ type Certificate struct {
 // what's required for their own purpose. Private keys are never opened.
 type ParsedConfig struct {
 	// Mode is ModeServer if a "server"/"server-bridge"/"mode server"
-	// directive was found, ModeClient otherwise — this also covers
-	// PSK/secret configs, which have no server-mode concept at all and are
-	// inherently point-to-point. Scope limit: an advanced P2P "tls-server"
-	// setup *without* "server"/"mode server" is misclassified as a client.
+	// directive was found, or if the config listens rather than initiates:
+	// a "proto *-server" (e.g. tcp-server), or an "lport" with neither
+	// "remote" nor "client" — this covers point-to-point static key
+	// (secret) servers, which can't use any server-mode directive. ModeClient
+	// otherwise. Scope limit: a P2P listener with neither "proto *-server"
+	// nor "lport" (e.g. UDP on the default port, no "remote") is still
+	// classified as a client.
 	Mode Mode
+
+	// PeerVirtualAddress is the peer's VPN address from a point-to-point
+	// "ifconfig <local> <remote>" directive, only on a tun device without
+	// "topology subnet" (otherwise the second argument is a netmask, not a
+	// peer address). Empty if not applicable.
+	PeerVirtualAddress string
 
 	// ManagementAddress is empty if no "management" directive was found.
 	ManagementAddress string
@@ -91,6 +100,10 @@ func ParseConfig(configPath string) (*ParsedConfig, error) {
 	}
 	baseDir := filepath.Dir(configPath)
 	cfg := &ParsedConfig{Mode: ModeClient}
+	var (
+		serverDirective, listenProto, hasLport, hasRemote, hasClient, tunDev, subnetTopology bool
+		ifconfigPeer                                                                         string
+	)
 
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	for scanner.Scan() {
@@ -106,8 +119,27 @@ func ParseConfig(configPath string) (*ParsedConfig, error) {
 		}
 
 		if isServerModeDirective(line) {
-			cfg.Mode = ModeServer
+			serverDirective = true
 			continue
+		}
+
+		switch {
+		case matchesDirective(line, "proto"):
+			listenProto = strings.HasSuffix(directiveValue(line, "proto"), "-server")
+		case matchesDirective(line, "lport"):
+			hasLport = true
+		case matchesDirective(line, "remote"):
+			hasRemote = true
+		case matchesDirective(line, "client"):
+			hasClient = true
+		case matchesDirective(line, "dev"):
+			tunDev = strings.HasPrefix(directiveValue(line, "dev"), "tun")
+		case matchesDirective(line, "topology"):
+			subnetTopology = directiveValue(line, "topology") == "subnet"
+		case matchesDirective(line, "ifconfig"):
+			if fields := strings.Fields(directiveValue(line, "ifconfig")); len(fields) >= 2 {
+				ifconfigPeer = fields[1]
+			}
 		}
 
 		if cfg.ManagementAddress == "" && matchesDirective(line, "management") {
@@ -123,6 +155,12 @@ func ParseConfig(configPath string) (*ParsedConfig, error) {
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("scanning config %s: %w", configPath, err)
+	}
+	if serverDirective || listenProto || (hasLport && !hasRemote && !hasClient) {
+		cfg.Mode = ModeServer
+	}
+	if tunDev && !subnetTopology {
+		cfg.PeerVirtualAddress = ifconfigPeer
 	}
 	return cfg, nil
 }

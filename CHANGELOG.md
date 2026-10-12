@@ -10,6 +10,25 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-12
+
+### Added
+
+- `test/integration/p2p/`: a new end-to-end stack with a point-to-point
+  static key server and client, discovered through `targets_glob`.
+
+### Fixed
+
+- `targets_glob` now detects point-to-point servers (e.g. static key
+  `secret` configs, which can't use `server`/`mode server`) as servers
+  rather than tunnels: a config with `proto tcp-server`/`tcp4-server`/
+  `tcp6-server`, or `lport` without `remote` or `client`, is a server.
+- Server monitoring handles point-to-point servers, whose `status` response
+  has no `CLIENT_LIST`: their single peer is reported from `state` (1 client
+  while `CONNECTED`, 0 otherwise) with the instance's global link counters,
+  `common_name=""`, the real address from `state` and the virtual address
+  from the config's `ifconfig` directive.
+
 ## [0.4.0] - 2026-10-10
 
 ### Added
@@ -89,7 +108,8 @@ and this project uses [Semantic Versioning](https://semver.org/).
   tunnel — connection state and traffic counters from the management
   interface, certificate expiry from the client config file.
 
-[Unreleased]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/v0.1.0...v0.2.0

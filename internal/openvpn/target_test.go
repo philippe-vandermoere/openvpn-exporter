@@ -386,6 +386,89 @@ func TestTarget_FetchServerStatus_VersionCommandFails(t *testing.T) {
 	}
 }
 
+// p2pStatusResponse is a point-to-point instance's reply to "status 3": the
+// status version is ignored outside multi-client mode.
+const p2pStatusResponse = "OpenVPN STATISTICS\r\n" +
+	"Updated,Mon Oct 12 10:00:00 2026\r\n" +
+	"TUN/TAP read bytes,100\r\n" +
+	"TUN/TAP write bytes,200\r\n" +
+	"TCP/UDP read bytes,300\r\n" +
+	"TCP/UDP write bytes,400\r\n" +
+	"Auth read bytes,500\r\n" +
+	"END\r\n"
+
+func serveP2PServerStatus(t *testing.T, stateLine string) string {
+	t.Helper()
+	return startFakeServer(t, func(t *testing.T, conn net.Conn) {
+		_, _ = conn.Write([]byte(">INFO:OpenVPN Management Interface Version 1 -- type 'help' for more info\r\n"))
+		r := bufio.NewReader(conn)
+
+		if got := serverReadLine(t, r); got != "status 3\n" {
+			t.Errorf("server: expected %q command, got %q", "status 3", got)
+		}
+		_, _ = conn.Write([]byte(p2pStatusResponse))
+
+		if got := serverReadLine(t, r); got != "state\n" {
+			t.Errorf("server: expected %q command, got %q", "state", got)
+		}
+		_, _ = conn.Write([]byte(stateLine + "\r\nEND\r\n"))
+
+		if got := serverReadLine(t, r); got != "version\n" {
+			t.Errorf("server: expected %q command, got %q", "version", got)
+		}
+		_, _ = conn.Write([]byte("OpenVPN Version: OpenVPN 2.4.4 x86_64-pc-linux-gnu [SSL (OpenSSL)]\r\nManagement Version: 1\r\nEND\r\n"))
+	})
+}
+
+func TestTarget_FetchServerStatus_P2PConnected(t *testing.T) {
+	addr := serveP2PServerStatus(t, "1700000000,CONNECTED,SUCCESS,10.10.0.1,203.0.113.7,51234,,")
+	target := &Target{ManagementAddress: addr, Mode: ModeServer, ConfigPath: writeConfig(t, clogReauConfig)}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	status, err := target.FetchServerStatus(ctx)
+	if err != nil {
+		t.Fatalf("FetchServerStatus: %v", err)
+	}
+	if !status.P2P {
+		t.Error("P2P = false, want true")
+	}
+	if status.Version != "2.4.4" {
+		t.Errorf("Version = %q, want 2.4.4", status.Version)
+	}
+	if len(status.Clients) != 1 {
+		t.Fatalf("got %d clients, want 1: %+v", len(status.Clients), status.Clients)
+	}
+	want := ClientInfo{
+		RealAddress:    "203.0.113.7:51234",
+		VirtualAddress: "10.10.0.2",
+		BytesReceived:  300,
+		BytesSent:      400,
+		ConnectedSince: time.Unix(1700000000, 0),
+	}
+	if got := status.Clients[0]; got != want {
+		t.Errorf("Clients[0] = %+v, want %+v", got, want)
+	}
+}
+
+func TestTarget_FetchServerStatus_P2PNotConnected(t *testing.T) {
+	addr := serveP2PServerStatus(t, "1700000000,WAIT,,,,,,")
+	target := &Target{ManagementAddress: addr, Mode: ModeServer}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	status, err := target.FetchServerStatus(ctx)
+	if err != nil {
+		t.Fatalf("FetchServerStatus: %v", err)
+	}
+	if !status.P2P {
+		t.Error("P2P = false, want true")
+	}
+	if len(status.Clients) != 0 {
+		t.Errorf("got %d clients, want 0: %+v", len(status.Clients), status.Clients)
+	}
+}
+
 func TestTarget_Certificates_ConfigPath(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir+"/ca.crt", generateCert(t, "Target CA", time.Now().Add(24*time.Hour)))

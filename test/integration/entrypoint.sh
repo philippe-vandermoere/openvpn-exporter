@@ -5,6 +5,13 @@ CONFIG_FILE="${OPENVPN_CONFIG_FILE:-/etc/openvpn/openvpn.conf}"
 PKI_DIR="${OPENVPN_PKI_DIR:-/pki}"
 MANAGEMENT_HOST="${OPENVPN_MANAGEMENT_HOST:-0.0.0.0}"
 MANAGEMENT_PORT="${OPENVPN_MANAGEMENT_PORT:-7504}"
+# Set OPENVPN_STATIC_KEY to render a point-to-point static key (secret)
+# config instead of a TLS one: no PKI, the server listens on
+# OPENVPN_PORT (proto tcp-server + lport) and the client connects to
+# OPENVPN_REMOTE:OPENVPN_PORT (proto tcp-client + remote), each with its own
+# OPENVPN_IFCONFIG ("<local ip> <peer ip>").
+STATIC_KEY="${OPENVPN_STATIC_KEY:-}"
+PORT="${OPENVPN_PORT:-1194}"
 
 OPENVPN_MANAGEMENT_PASSWORD_FILE=/run/secrets/openvpn-management
 mkdir -p "$(dirname "${OPENVPN_MANAGEMENT_PASSWORD_FILE}")"
@@ -18,36 +25,57 @@ chmod 600 "${OPENVPN_MANAGEMENT_PASSWORD_FILE}"
 mkdir -p "$(dirname "${CONFIG_FILE}")"
 : >"${CONFIG_FILE}"
 
-{
-    echo 'proto udp'
-    echo 'dev tun'
-} | tee -a "${CONFIG_FILE}"
-
-if [ "${OPENVPN_ROLE:-client}" = "server" ]; then
-    echo 'port 1194' | tee -a "${CONFIG_FILE}"
-else
+if [ -n "${STATIC_KEY}" ]; then
+    echo 'dev tun' | tee -a "${CONFIG_FILE}"
+    if [ "${OPENVPN_ROLE:-client}" = "server" ]; then
+        {
+            echo 'proto tcp-server'
+            echo "lport ${PORT}"
+        } | tee -a "${CONFIG_FILE}"
+    else
+        {
+            echo 'proto tcp-client'
+            echo "remote ${OPENVPN_REMOTE} ${PORT}"
+        } | tee -a "${CONFIG_FILE}"
+    fi
     {
-        echo 'client'
-        echo "remote ${OPENVPN_REMOTE}"
-        echo 'resolv-retry infinite'
-        echo 'nobind'
-    } | tee -a "${CONFIG_FILE}"
-fi
-
-{
-    echo "ca ${PKI_DIR}/ca.crt"
-    echo "cert ${PKI_DIR}/tls.crt"
-    echo "key ${PKI_DIR}/tls.key"
-} | tee -a "${CONFIG_FILE}"
-
-if [ "${OPENVPN_ROLE:-client}" = "server" ]; then
-    {
-        echo 'dh none'
-        echo 'server 10.8.0.0 255.255.255.0'
-        echo 'ifconfig-pool-persist /tmp/ipp.txt'
+        echo "ifconfig ${OPENVPN_IFCONFIG}"
+        echo "secret ${STATIC_KEY}"
+        # Static key's default cipher (BF-CBC) isn't available with OpenSSL 3.
+        echo 'cipher AES-256-CBC'
     } | tee -a "${CONFIG_FILE}"
 else
-    echo 'remote-cert-tls server' | tee -a "${CONFIG_FILE}"
+    {
+        echo 'proto udp'
+        echo 'dev tun'
+    } | tee -a "${CONFIG_FILE}"
+
+    if [ "${OPENVPN_ROLE:-client}" = "server" ]; then
+        echo 'port 1194' | tee -a "${CONFIG_FILE}"
+    else
+        {
+            echo 'client'
+            echo "remote ${OPENVPN_REMOTE}"
+            echo 'resolv-retry infinite'
+            echo 'nobind'
+        } | tee -a "${CONFIG_FILE}"
+    fi
+
+    {
+        echo "ca ${PKI_DIR}/ca.crt"
+        echo "cert ${PKI_DIR}/tls.crt"
+        echo "key ${PKI_DIR}/tls.key"
+    } | tee -a "${CONFIG_FILE}"
+
+    if [ "${OPENVPN_ROLE:-client}" = "server" ]; then
+        {
+            echo 'dh none'
+            echo 'server 10.8.0.0 255.255.255.0'
+            echo 'ifconfig-pool-persist /tmp/ipp.txt'
+        } | tee -a "${CONFIG_FILE}"
+    else
+        echo 'remote-cert-tls server' | tee -a "${CONFIG_FILE}"
+    fi
 fi
 
 {
