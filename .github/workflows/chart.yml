@@ -20,7 +20,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: azure/setup-helm@v5
       - uses: actions/setup-python@v7
         with:
@@ -31,7 +31,7 @@ jobs:
   unit-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: azure/setup-helm@v5
       # helm-unittest has no Helm-compatible .prov file, so --verify can
       # never succeed for it (see README for the full explanation); pinning
@@ -49,7 +49,7 @@ jobs:
         # ships a new minor.
         k8s-version: ["1.35.9", "1.36.5", "1.37.1"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: azure/setup-helm@v5
       - uses: actions/setup-go@v7
         with:
