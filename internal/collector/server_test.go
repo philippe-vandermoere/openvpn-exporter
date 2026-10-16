@@ -85,6 +85,7 @@ func TestServerCollector_HealthyServer(t *testing.T) {
 	assertContains(t, metrics, `openvpn_server_client_info{cipher="AES-256-GCM",common_name="openvpn_25",real_address="172.18.0.3:49964",server="vpn-gw",username="UNDEF",virtual_address="10.8.0.6"} 1`)
 	assertContains(t, metrics, `openvpn_server_client_bytes_total{common_name="openvpn_25",direction="in",server="vpn-gw"} 333`)
 	assertContains(t, metrics, `openvpn_server_client_bytes_total{common_name="openvpn_25",direction="out",server="vpn-gw"} 444`)
+	assertContains(t, metrics, `openvpn_server_client_connected_since_timestamp_seconds{common_name="openvpn_25",server="vpn-gw"} 1.700000001e+09`)
 }
 
 func TestServerCollector_NoClientsConnected(t *testing.T) {
@@ -136,6 +137,74 @@ func TestServerCollector_NoClientsConnected(t *testing.T) {
 	assertNotContains(t, metrics, "openvpn_server_client_info{")
 	assertNotContains(t, metrics, "openvpn_server_client_bytes_total{")
 	assertNotContains(t, metrics, "openvpn_server_client_connected_since_timestamp_seconds{")
+}
+
+// TestServerCollector_DuplicateCommonNames covers clients sharing a common
+// name: several still in the TLS handshake (reported as "UNDEF") or
+// duplicate-cn. Their bytes/connected_since series must be merged instead of
+// emitted twice, which would fail the whole scrape.
+func TestServerCollector_DuplicateCommonNames(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_, _ = conn.Write([]byte(">INFO:OpenVPN Management Interface Version 1 -- type 'help' for more info\r\n"))
+		r := bufio.NewReader(conn)
+		if _, err := r.ReadString('\n'); err != nil { // "status 3"
+			return
+		}
+		// OpenVPN 2.4 rows (no Data Channel Cipher column).
+		_, _ = conn.Write([]byte(
+			"TITLE\tOpenVPN 2.4.12\r\n" +
+				"HEADER\tCLIENT_LIST\tCommon Name\tReal Address\tVirtual Address\tVirtual IPv6 Address\tBytes Received\tBytes Sent\tConnected Since\tConnected Since (time_t)\tUsername\tClient ID\tPeer ID\r\n" +
+				"CLIENT_LIST\tUNDEF\t192.0.2.1:50001\t\t\t1000\t6000\t2026-10-16 10:00:05\t1792000005\tUNDEF\t3\t0\r\n" +
+				"CLIENT_LIST\tUNDEF\t192.0.2.2:50002\t\t\t237\t702\t2026-10-16 10:00:03\t1792000003\tUNDEF\t4\t1\r\n" +
+				"CLIENT_LIST\tlaptop\t192.0.2.3:50003\t10.8.0.6\t\t10\t20\t2026-10-16 09:00:00\t1791996400\tUNDEF\t1\t2\r\n" +
+				"CLIENT_LIST\tlaptop\t192.0.2.4:50004\t10.8.0.10\t\t30\t40\t2026-10-16 08:00:00\t1791992800\tUNDEF\t2\t3\r\n" +
+				"END\r\n",
+		))
+		if _, err := r.ReadString('\n'); err != nil { // "version"
+			return
+		}
+		_, _ = conn.Write([]byte(
+			"OpenVPN Version: OpenVPN 2.4.12 x86_64-pc-linux-gnu [SSL (OpenSSL)]\r\n" +
+				"Management Version: 1\r\n" +
+				"END\r\n",
+		))
+	}()
+
+	c := NewCollector([]openvpn.Target{{
+		Name:              "fieldbox",
+		Mode:              openvpn.ModeServer,
+		ManagementAddress: ln.Addr().String(),
+	}}, 2*time.Second, nil)
+
+	metrics, err := gather(c)
+	if err != nil {
+		t.Fatalf("gathering metrics: %v", err)
+	}
+
+	assertContains(t, metrics, `openvpn_server_up{server="fieldbox"} 1`)
+	// Clients still authenticating (UNDEF) are not counted and get no series.
+	assertContains(t, metrics, `openvpn_server_clients_connected{server="fieldbox"} 2`)
+	assertNotContains(t, metrics, `common_name="UNDEF"`)
+
+	// client_info stays one series per connection.
+	assertContains(t, metrics, `openvpn_server_client_info{cipher="",common_name="laptop",real_address="192.0.2.3:50003",server="fieldbox",username="UNDEF",virtual_address="10.8.0.6"} 1`)
+	assertContains(t, metrics, `openvpn_server_client_info{cipher="",common_name="laptop",real_address="192.0.2.4:50004",server="fieldbox",username="UNDEF",virtual_address="10.8.0.10"} 1`)
+
+	// duplicate-cn: bytes are summed, connected_since is the earliest connection.
+	assertContains(t, metrics, `openvpn_server_client_bytes_total{common_name="laptop",direction="in",server="fieldbox"} 40`)
+	assertContains(t, metrics, `openvpn_server_client_bytes_total{common_name="laptop",direction="out",server="fieldbox"} 60`)
+	assertContains(t, metrics, `openvpn_server_client_connected_since_timestamp_seconds{common_name="laptop",server="fieldbox"} 1.7919928e+09`)
 }
 
 func TestServerCollector_DownServer(t *testing.T) {

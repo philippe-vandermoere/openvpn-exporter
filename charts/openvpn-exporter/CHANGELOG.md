@@ -11,6 +11,15 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-10-16
+
+### Changed
+
+- Bumped `appVersion` to 0.5.2 — see the exporter changelog. `/metrics`
+  no longer fails when several clients authenticate at the same time or
+  share a common name (`duplicate-cn`); clients still authenticating are
+  no longer counted in `openvpn_server_clients_connected`.
+
 ## [0.7.1] - 2026-10-16
 
 ### Changed
@@ -85,7 +94,8 @@ and this project uses [Semantic Versioning](https://semver.org/).
   configuration (`config.tunnel`), password Secret reference, Service,
   optional Prometheus Operator `ServiceMonitor`, liveness/readiness probes.
 
-[Unreleased]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/chart-v0.7.1...HEAD
+[Unreleased]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/chart-v0.7.2...HEAD
+[0.7.2]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/chart-v0.7.1...chart-v0.7.2
 [0.7.1]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/chart-v0.7.0...chart-v0.7.1
 [0.7.0]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/chart-v0.6.0...chart-v0.7.0
 [0.6.0]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/chart-v0.5.0...chart-v0.6.0
