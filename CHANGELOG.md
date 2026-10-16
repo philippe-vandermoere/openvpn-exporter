@@ -10,6 +10,8 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-10-16
+
 ### Changed
 
 - Server clients still in the TLS handshake or authentication phase
@@ -140,7 +142,8 @@ and this project uses [Semantic Versioning](https://semver.org/).
   tunnel — connection state and traffic counters from the management
   interface, certificate expiry from the client config file.
 
-[Unreleased]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/v0.3.0...v0.4.0
