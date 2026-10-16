@@ -54,7 +54,7 @@ a different metric family, keyed by `server` and, for the per-client metrics, al
 |---|---|---|---|
 | `openvpn_server_up` | gauge | `server` | 1 if the management interface responded, 0 otherwise. |
 | `openvpn_server_clients_connected` | gauge | `server` | Number of clients currently connected. Absent when the management interface is unreachable. |
-| `openvpn_server_client_info` | gauge | `server`, `common_name`, `real_address`, `virtual_address`, `username`, `cipher` | Always 1, one series per connected client. `real_address` is the client's WAN-side `ip:port`, `virtual_address` its assigned VPN IP, `username` is `UNDEF` unless `auth-user-pass` is in use. |
+| `openvpn_server_client_info` | gauge | `server`, `common_name`, `real_address`, `virtual_address`, `username`, `cipher` | Always 1, one series per connected client. `real_address` is the client's WAN-side `ip:port`, `virtual_address` its assigned VPN IP, `username` is `UNDEF` unless `auth-user-pass` is in use, `cipher` is empty on OpenVPN 2.4 (which doesn't report it). |
 | `openvpn_server_client_bytes_total` | counter | `server`, `common_name`, `direction` (`in`\|`out`) | Per-client traffic. Resets whenever that client reconnects — use `rate()`/`increase()`, not the raw value. |
 | `openvpn_server_client_connected_since_timestamp_seconds` | gauge | `server`, `common_name` | Unix timestamp at which this client connected. |
 | `openvpn_server_info` | gauge | `server`, `version` | Always 1; `version` is the OpenVPN release running this server. Same failure handling as `openvpn_tunnel_info`'s `version` (absent + warned at most once per server on failure, never fails the scrape). |

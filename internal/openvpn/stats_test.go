@@ -253,6 +253,35 @@ func TestParseServerStatusLines_NoClientsConnected(t *testing.T) {
 	}
 }
 
+// OpenVPN 2.4 has no trailing Data Channel Cipher column (added in 2.5).
+func TestParseServerStatusLines_OpenVPN24NoCipherColumn(t *testing.T) {
+	lines := []string{
+		"TITLE\tOpenVPN 2.4.12 x86_64-pc-linux-gnu [SSL (OpenSSL)] [LZO] [LZ4] [EPOLL] [PKCS11] [MH/PKTINFO] [AEAD] built on Jun 27 2024",
+		"TIME\tFri Oct 16 14:31:52 2026\t1792161112",
+		"HEADER\tCLIENT_LIST\tCommon Name\tReal Address\tVirtual Address\tVirtual IPv6 Address\tBytes Received\tBytes Sent\tConnected Since\tConnected Since (time_t)\tUsername\tClient ID\tPeer ID",
+		"CLIENT_LIST\tclient-1\t203.0.113.10:43790\t10.8.0.6\t\t8996066\t11251148\tFri Oct 16 13:39:09 2026\t1792157949\tUNDEF\t17\t0",
+		"GLOBAL_STATS\tMax bcast/mcast queue length\t0",
+	}
+
+	clients, err := parseServerStatusLines(lines)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := ClientInfo{
+		CommonName:     "client-1",
+		RealAddress:    "203.0.113.10:43790",
+		VirtualAddress: "10.8.0.6",
+		BytesReceived:  8996066,
+		BytesSent:      11251148,
+		ConnectedSince: time.Unix(1792157949, 0),
+		Username:       "UNDEF",
+		Cipher:         "",
+	}
+	if len(clients) != 1 || clients[0] != want {
+		t.Errorf("got %+v, want [%+v]", clients, want)
+	}
+}
+
 func TestParseServerStatusLines_MalformedClientListLine(t *testing.T) {
 	lines := []string{"CLIENT_LIST\topenvpn_26\t172.18.0.5:51607"} // too few fields
 	if _, err := parseServerStatusLines(lines); err == nil {

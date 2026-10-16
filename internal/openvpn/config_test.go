@@ -437,14 +437,14 @@ func TestParseConfig_ManagementWithoutCerts(t *testing.T) {
 	}
 }
 
-// clogReauConfig is a real point-to-point static key server config: no
+// p2pStaticKeyConfig is a point-to-point static key server config: no
 // "server"/"mode server" directive is allowed with "secret".
-const clogReauConfig = `dev tun
+const p2pStaticKeyConfig = `dev tun
 proto tcp-server
 local 198.51.100.10
 lport 8443
 ifconfig 10.10.0.1 10.10.0.2
-secret clog-reau.key
+secret p2p-site-a.key
 persist-tun
 persist-key
 keepalive 10 60
@@ -457,7 +457,7 @@ func TestParseConfig_ListeningConfigsAreServers(t *testing.T) {
 		content string
 		want    Mode
 	}{
-		{"static key p2p server", clogReauConfig, ModeServer},
+		{"static key p2p server", p2pStaticKeyConfig, ModeServer},
 		{"proto tcp-server alone", "proto tcp-server\nsecret static.key\n", ModeServer},
 		{"proto tcp6-server", "proto tcp6-server\n", ModeServer},
 		{"lport without remote", "proto udp\nlport 1195\nsecret static.key\n", ModeServer},
@@ -485,7 +485,7 @@ func TestParseConfig_PeerVirtualAddress(t *testing.T) {
 		content string
 		want    string
 	}{
-		{"tun p2p", clogReauConfig, "10.10.0.2"},
+		{"tun p2p", p2pStaticKeyConfig, "10.10.0.2"},
 		{"tap: second argument is a netmask", "dev tap0\nifconfig 10.10.0.1 255.255.255.0\n", ""},
 		{"tun with topology subnet", "dev tun\ntopology subnet\nifconfig 10.10.0.1 255.255.255.0\n", ""},
 		{"no ifconfig", "dev tun\n", ""},

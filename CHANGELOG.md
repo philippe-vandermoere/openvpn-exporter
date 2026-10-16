@@ -10,6 +10,13 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Server monitoring works with OpenVPN 2.4 servers, whose `status 3`
+  `CLIENT_LIST` rows have no trailing `Data Channel Cipher` column (added
+  in 2.5). These rows were rejected as malformed and the whole server was
+  reported as down; `cipher` is now reported empty instead.
+
 ## [0.5.0] - 2026-10-12
 
 ### Added
