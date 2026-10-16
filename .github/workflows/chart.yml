@@ -21,7 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: azure/setup-helm@v5
+      - run: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-4 | bash
+        shell: bash
       - uses: actions/setup-python@v7
         with:
           python-version: "3.x"
@@ -32,11 +33,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: azure/setup-helm@v5
-      # helm-unittest has no Helm-compatible .prov file, so --verify can
-      # never succeed for it (see README for the full explanation); pinning
-      # an explicit release tag is the mitigation that *is* available, so
-      # CI isn't silently tracking the plugin's main branch.
+      - run: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-4 | bash
+        shell: bash
       - run: helm plugin install --verify=false https://github.com/helm-unittest/helm-unittest
       - run: helm unittest charts/openvpn-exporter
 
@@ -50,7 +48,8 @@ jobs:
         k8s-version: ["1.35.9", "1.36.5", "1.37.1"]
     steps:
       - uses: actions/checkout@v7
-      - uses: azure/setup-helm@v5
+      - run: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-4 | bash
+        shell: bash
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod

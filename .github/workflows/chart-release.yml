@@ -12,7 +12,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v7
-      - uses: azure/setup-helm@v5
+      - run: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-4 | bash
+        shell: bash
       - run: helm lint charts/openvpn-exporter
       - run: helm package charts/openvpn-exporter --destination dist
       - name: Login to GHCR
