@@ -219,19 +219,43 @@ func TestParseServerStatusLines(t *testing.T) {
 		t.Fatalf("got %d clients, want 3: %+v", len(clients), clients)
 	}
 
-	want := ClientInfo{
-		CommonName:     "openvpn_26",
-		RealAddress:    "172.18.0.5:51607",
-		VirtualAddress: "10.8.0.14",
-		BytesReceived:  5941,
-		BytesSent:      5968,
-		ConnectedSince: time.Unix(1791562964, 0),
-		Username:       "UNDEF",
-		Cipher:         "AES-256-GCM",
+	// Every row keeps its own values, nothing leaks between clients.
+	want := []ClientInfo{
+		{
+			CommonName:     "openvpn_25",
+			RealAddress:    "172.18.0.3:49964",
+			VirtualAddress: "10.8.0.6",
+			BytesReceived:  5859,
+			BytesSent:      5948,
+			ConnectedSince: time.Unix(1791562963, 0),
+			Username:       "UNDEF",
+			Cipher:         "AES-256-GCM",
+		},
+		{
+			CommonName:     "openvpn_26",
+			RealAddress:    "172.18.0.5:51607",
+			VirtualAddress: "10.8.0.14",
+			BytesReceived:  5941,
+			BytesSent:      5968,
+			ConnectedSince: time.Unix(1791562964, 0),
+			Username:       "UNDEF",
+			Cipher:         "AES-256-GCM",
+		},
+		{
+			CommonName:     "openvpn_27",
+			RealAddress:    "172.18.0.4:59830",
+			VirtualAddress: "10.8.0.10",
+			BytesReceived:  7184,
+			BytesSent:      6049,
+			ConnectedSince: time.Unix(1791562963, 0),
+			Username:       "UNDEF",
+			Cipher:         "AES-256-GCM",
+		},
 	}
-	got := clients[1]
-	if got != want {
-		t.Errorf("clients[1] = %+v, want %+v", got, want)
+	for i := range want {
+		if clients[i] != want[i] {
+			t.Errorf("clients[%d] = %+v, want %+v", i, clients[i], want[i])
+		}
 	}
 }
 

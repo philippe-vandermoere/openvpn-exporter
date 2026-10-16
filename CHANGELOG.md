@@ -10,6 +10,24 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Server clients still in the TLS handshake or authentication phase
+  (reported by OpenVPN with common name `UNDEF`) are no longer counted in
+  `openvpn_server_clients_connected` and get no `openvpn_server_client_*`
+  series.
+
+### Fixed
+
+- `/metrics` no longer fails with "collected before with the same name and
+  label values" when several server clients share a common name: several
+  clients authenticating at the same time (`UNDEF`, now ignored) or
+  `duplicate-cn` connections. For `duplicate-cn`,
+  `openvpn_server_client_bytes_total` is summed across the connections and
+  `openvpn_server_client_connected_since_timestamp_seconds` reports the
+  earliest one; `openvpn_server_client_info` stays one series per
+  connection.
+
 ## [0.5.1] - 2026-10-16
 
 ### Changed

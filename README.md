@@ -53,10 +53,10 @@ a different metric family, keyed by `server` and, for the per-client metrics, al
 | Metric | Type | Labels | Notes |
 |---|---|---|---|
 | `openvpn_server_up` | gauge | `server` | 1 if the management interface responded, 0 otherwise. |
-| `openvpn_server_clients_connected` | gauge | `server` | Number of clients currently connected. Absent when the management interface is unreachable. |
+| `openvpn_server_clients_connected` | gauge | `server` | Number of clients currently connected. Clients still in the TLS handshake or authentication phase (reported by OpenVPN with common name `UNDEF`) are not counted and get no per-client series. Absent when the management interface is unreachable. |
 | `openvpn_server_client_info` | gauge | `server`, `common_name`, `real_address`, `virtual_address`, `username`, `cipher` | Always 1, one series per connected client. `real_address` is the client's WAN-side `ip:port`, `virtual_address` its assigned VPN IP, `username` is `UNDEF` unless `auth-user-pass` is in use, `cipher` is empty on OpenVPN 2.4 (which doesn't report it). |
-| `openvpn_server_client_bytes_total` | counter | `server`, `common_name`, `direction` (`in`\|`out`) | Per-client traffic. Resets whenever that client reconnects — use `rate()`/`increase()`, not the raw value. |
-| `openvpn_server_client_connected_since_timestamp_seconds` | gauge | `server`, `common_name` | Unix timestamp at which this client connected. |
+| `openvpn_server_client_bytes_total` | counter | `server`, `common_name`, `direction` (`in`\|`out`) | Per-client traffic. Resets whenever that client reconnects — use `rate()`/`increase()`, not the raw value. Connections sharing a common name (`duplicate-cn`) are summed into one series. |
+| `openvpn_server_client_connected_since_timestamp_seconds` | gauge | `server`, `common_name` | Unix timestamp at which this client connected; the earliest one when several connections share a common name (`duplicate-cn`). |
 | `openvpn_server_info` | gauge | `server`, `version` | Always 1; `version` is the OpenVPN release running this server. Same failure handling as `openvpn_tunnel_info`'s `version` (absent + warned at most once per server on failure, never fails the scrape). |
 | `openvpn_server_scrape_duration_seconds` | gauge | `server` | Duration of the last management interface scrape, including failed attempts. |
 | `openvpn_server_cert_expiry_timestamp_seconds` | gauge | `server`, `role` (`ca`\|`client`), `subject` | Same semantics as `openvpn_tunnel_cert_expiry_timestamp_seconds`: certificate expiry as an absolute Unix timestamp, independent of the server's reachability. Emitted only if `config_path` or `cert_path` is set for the server. |

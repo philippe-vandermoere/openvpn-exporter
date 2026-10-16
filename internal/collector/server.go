@@ -80,14 +80,21 @@ func (c *Collector) collectServer(ch chan<- prometheus.Metric, s openvpn.Target)
 		c.logger.Warn("server scrape failed, reporting as down", "server", s.Name, "error", err)
 		ch <- prometheus.MustNewConstMetric(serverUpDesc, prometheus.GaugeValue, 0, s.Name)
 	} else {
-		ch <- prometheus.MustNewConstMetric(serverUpDesc, prometheus.GaugeValue, 1, s.Name)
-		ch <- prometheus.MustNewConstMetric(serverClientsConnectedDesc, prometheus.GaugeValue, float64(len(status.Clients)), s.Name)
+		clients := authenticatedClients(status.Clients)
 
-		for _, cl := range status.Clients {
+		ch <- prometheus.MustNewConstMetric(serverUpDesc, prometheus.GaugeValue, 1, s.Name)
+		ch <- prometheus.MustNewConstMetric(serverClientsConnectedDesc, prometheus.GaugeValue, float64(len(clients)), s.Name)
+
+		for _, cl := range clients {
+			// real_address (ip:port) is unique per connection, so this
+			// series never collides even when common names do.
 			ch <- prometheus.MustNewConstMetric(
 				serverClientInfoDesc, prometheus.GaugeValue, 1,
 				s.Name, cl.CommonName, cl.RealAddress, cl.VirtualAddress, cl.Username, cl.Cipher,
 			)
+		}
+
+		for _, cl := range mergeClientsByCommonName(clients) {
 			ch <- prometheus.MustNewConstMetric(serverClientBytesDesc, prometheus.CounterValue, float64(cl.BytesReceived), s.Name, cl.CommonName, "in")
 			ch <- prometheus.MustNewConstMetric(serverClientBytesDesc, prometheus.CounterValue, float64(cl.BytesSent), s.Name, cl.CommonName, "out")
 			// Zero for a point-to-point peer whose "state" timestamp couldn't
@@ -121,4 +128,47 @@ func (c *Collector) collectServer(ch chan<- prometheus.Metric, s openvpn.Target)
 			s.Name, cert.Role, cert.Subject,
 		)
 	}
+}
+
+// undefCommonName is the common name OpenVPN reports for a client that has
+// not finished its TLS handshake/authentication yet.
+const undefCommonName = "UNDEF"
+
+// authenticatedClients drops clients still in the TLS handshake or
+// authentication phase: they are not connected yet, and several of them
+// would all share the "UNDEF" common name.
+func authenticatedClients(clients []openvpn.ClientInfo) []openvpn.ClientInfo {
+	authenticated := make([]openvpn.ClientInfo, 0, len(clients))
+	for _, cl := range clients {
+		if cl.CommonName != undefCommonName {
+			authenticated = append(authenticated, cl)
+		}
+	}
+	return authenticated
+}
+
+// mergeClientsByCommonName folds connections sharing a common name
+// (duplicate-cn) into one entry, since the bytes/connected_since series are
+// keyed by common_name only and the registry rejects the whole scrape on a
+// duplicate series. Bytes are summed and ConnectedSince is the earliest
+// non-zero connection time. Only the CommonName, Bytes* and ConnectedSince
+// fields of the result are meaningful.
+func mergeClientsByCommonName(clients []openvpn.ClientInfo) []openvpn.ClientInfo {
+	merged := make([]openvpn.ClientInfo, 0, len(clients))
+	index := make(map[string]int, len(clients))
+	for _, cl := range clients {
+		i, ok := index[cl.CommonName]
+		if !ok {
+			index[cl.CommonName] = len(merged)
+			merged = append(merged, cl)
+			continue
+		}
+		m := &merged[i]
+		m.BytesReceived += cl.BytesReceived
+		m.BytesSent += cl.BytesSent
+		if m.ConnectedSince.IsZero() || (!cl.ConnectedSince.IsZero() && cl.ConnectedSince.Before(m.ConnectedSince)) {
+			m.ConnectedSince = cl.ConnectedSince
+		}
+	}
+	return merged
 }
