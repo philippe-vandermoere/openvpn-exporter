@@ -226,6 +226,9 @@ func isMultiClientStatus(lines []string) bool {
 //
 //	CLIENT_LIST	openvpn_25	172.18.0.3:49964	10.8.0.6		5859	5948	2026-10-09 16:22:43	1791562963	UNDEF	0	0	AES-256-GCM
 //	            ^CommonName  ^RealAddress      ^VirtualAddress (IPv6 empty) ^BytesRecv ^BytesSent ^ConnectedSince          ^(time_t)   ^Username ^ClientID ^PeerID ^Cipher
+//
+// The trailing Data Channel Cipher column was added in OpenVPN 2.5; on 2.4
+// the row ends at Peer ID and Cipher is left empty.
 func parseServerStatusLines(lines []string) ([]ClientInfo, error) {
 	var clients []ClientInfo
 	for _, line := range lines {
@@ -233,8 +236,12 @@ func parseServerStatusLines(lines []string) ([]ClientInfo, error) {
 		if fields[0] != "CLIENT_LIST" {
 			continue
 		}
-		if len(fields) < 13 {
+		if len(fields) < 12 {
 			return nil, fmt.Errorf("malformed CLIENT_LIST line: %q", line)
+		}
+		var cipher string
+		if len(fields) >= 13 {
+			cipher = fields[12]
 		}
 
 		bytesRecv, err := strconv.ParseUint(fields[5], 10, 64)
@@ -258,7 +265,7 @@ func parseServerStatusLines(lines []string) ([]ClientInfo, error) {
 			BytesSent:      bytesSent,
 			ConnectedSince: time.Unix(sec, 0),
 			Username:       fields[9],
-			Cipher:         fields[12],
+			Cipher:         cipher,
 		})
 	}
 	return clients, nil

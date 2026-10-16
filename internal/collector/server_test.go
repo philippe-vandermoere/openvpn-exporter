@@ -379,13 +379,13 @@ func TestServerCollector_P2PStaticKeyServer(t *testing.T) {
 		_, _ = conn.Write([]byte("OpenVPN Version: OpenVPN 2.4.4 x86_64-pc-linux-gnu [SSL (OpenSSL)]\r\nManagement Version: 1\r\nEND\r\n"))
 	}()
 
-	configPath := filepath.Join(t.TempDir(), "clog-reau.conf")
-	if err := os.WriteFile(configPath, []byte("dev tun\nproto tcp-server\nlport 8443\nifconfig 10.10.0.1 10.10.0.2\nsecret clog-reau.key\n"), 0o600); err != nil {
+	configPath := filepath.Join(t.TempDir(), "p2p-site-a.conf")
+	if err := os.WriteFile(configPath, []byte("dev tun\nproto tcp-server\nlport 8443\nifconfig 10.10.0.1 10.10.0.2\nsecret p2p-site-a.key\n"), 0o600); err != nil {
 		t.Fatalf("writing config: %v", err)
 	}
 
 	c := NewCollector([]openvpn.Target{{
-		Name:              "clog-reau",
+		Name:              "p2p-site-a",
 		Mode:              openvpn.ModeServer,
 		ManagementAddress: ln.Addr().String(),
 		ConfigPath:        configPath,
@@ -396,13 +396,13 @@ func TestServerCollector_P2PStaticKeyServer(t *testing.T) {
 		t.Fatalf("gathering metrics: %v", err)
 	}
 
-	assertContains(t, metrics, `openvpn_server_up{server="clog-reau"} 1`)
-	assertContains(t, metrics, `openvpn_server_clients_connected{server="clog-reau"} 1`)
-	assertContains(t, metrics, `openvpn_server_info{server="clog-reau",version="2.4.4"} 1`)
-	assertContains(t, metrics, `openvpn_server_client_info{cipher="",common_name="",real_address="203.0.113.7:51234",server="clog-reau",username="",virtual_address="10.10.0.2"} 1`)
-	assertContains(t, metrics, `openvpn_server_client_bytes_total{common_name="",direction="in",server="clog-reau"} 300`)
-	assertContains(t, metrics, `openvpn_server_client_bytes_total{common_name="",direction="out",server="clog-reau"} 400`)
-	assertContains(t, metrics, `openvpn_server_client_connected_since_timestamp_seconds{common_name="",server="clog-reau"} 1.7e+09`)
+	assertContains(t, metrics, `openvpn_server_up{server="p2p-site-a"} 1`)
+	assertContains(t, metrics, `openvpn_server_clients_connected{server="p2p-site-a"} 1`)
+	assertContains(t, metrics, `openvpn_server_info{server="p2p-site-a",version="2.4.4"} 1`)
+	assertContains(t, metrics, `openvpn_server_client_info{cipher="",common_name="",real_address="203.0.113.7:51234",server="p2p-site-a",username="",virtual_address="10.10.0.2"} 1`)
+	assertContains(t, metrics, `openvpn_server_client_bytes_total{common_name="",direction="in",server="p2p-site-a"} 300`)
+	assertContains(t, metrics, `openvpn_server_client_bytes_total{common_name="",direction="out",server="p2p-site-a"} 400`)
+	assertContains(t, metrics, `openvpn_server_client_connected_since_timestamp_seconds{common_name="",server="p2p-site-a"} 1.7e+09`)
 	assertNotContains(t, metrics, "openvpn_server_cert_expiry_timestamp_seconds{")
 	assertNotContains(t, metrics, "openvpn_tunnel_up{")
 }

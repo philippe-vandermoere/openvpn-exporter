@@ -11,6 +11,14 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-16
+
+### Changed
+
+- Bumped `appVersion` to 0.5.1 — see the exporter changelog. Servers
+  running OpenVPN 2.4 are no longer reported as down.
+- The chart is now linted, tested and packaged with the latest Helm 4.
+
 ## [0.7.0] - 2026-10-12
 
 ### Changed
@@ -77,7 +85,8 @@ and this project uses [Semantic Versioning](https://semver.org/).
   configuration (`config.tunnel`), password Secret reference, Service,
   optional Prometheus Operator `ServiceMonitor`, liveness/readiness probes.
 
-[Unreleased]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/chart-v0.7.0...HEAD
+[Unreleased]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/chart-v0.7.1...HEAD
+[0.7.1]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/chart-v0.7.0...chart-v0.7.1
 [0.7.0]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/chart-v0.6.0...chart-v0.7.0
 [0.6.0]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/chart-v0.5.0...chart-v0.6.0
 [0.5.0]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/chart-v0.4.0...chart-v0.5.0

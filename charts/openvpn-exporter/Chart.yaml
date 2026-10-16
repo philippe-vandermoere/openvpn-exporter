@@ -2,8 +2,8 @@ apiVersion: v2
 name: openvpn-exporter
 description: Prometheus exporter for OpenVPN client tunnels and servers (state, traffic, certificate expiry)
 type: application
-version: 0.7.0
-appVersion: "0.5.0"
+version: 0.7.1
+appVersion: "0.5.1"
 home: https://github.com/philippe-vandermoere/openvpn-exporter
 sources:
   - https://github.com/philippe-vandermoere/openvpn-exporter

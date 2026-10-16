@@ -422,7 +422,7 @@ func serveP2PServerStatus(t *testing.T, stateLine string) string {
 
 func TestTarget_FetchServerStatus_P2PConnected(t *testing.T) {
 	addr := serveP2PServerStatus(t, "1700000000,CONNECTED,SUCCESS,10.10.0.1,203.0.113.7,51234,,")
-	target := &Target{ManagementAddress: addr, Mode: ModeServer, ConfigPath: writeConfig(t, clogReauConfig)}
+	target := &Target{ManagementAddress: addr, Mode: ModeServer, ConfigPath: writeConfig(t, p2pStaticKeyConfig)}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 

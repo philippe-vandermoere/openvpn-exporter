@@ -10,6 +10,20 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-16
+
+### Changed
+
+- Bumped `github.com/prometheus/client_golang` to 1.25.0 and
+  `github.com/bmatcuk/doublestar/v4` to 4.10.3.
+
+### Fixed
+
+- Server monitoring works with OpenVPN 2.4 servers, whose `status 3`
+  `CLIENT_LIST` rows have no trailing `Data Channel Cipher` column (added
+  in 2.5). These rows were rejected as malformed and the whole server was
+  reported as down; `cipher` is now reported empty instead.
+
 ## [0.5.0] - 2026-10-12
 
 ### Added
@@ -108,7 +122,8 @@ and this project uses [Semantic Versioning](https://semver.org/).
   tunnel — connection state and traffic counters from the management
   interface, certificate expiry from the client config file.
 
-[Unreleased]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/philippe-vandermoere/openvpn-exporter/compare/v0.2.0...v0.3.0
